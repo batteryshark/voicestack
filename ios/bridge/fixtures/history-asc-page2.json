@@ -1,0 +1,7 @@
+{
+  "data": [
+    {"id":"msg_fixture2","type":"assistant","agent":"general","model":{"id":"synthetic","providerID":"synthetic"},"time":{"created":2,"completed":4},"content":[{"type":"text","text":"Already visible. New suffix."},{"type":"reasoning","text":"Synthetic reasoning"},{"type":"tool","id":"tool_fixture","name":"synthetic","state":{"status":"completed","input":{},"content":[{"type":"file","uri":"data:image/png;base64,AA==","mime":"image/png","name":"fixture.png"}]},"time":{"created":2,"completed":2}}],"metadata":{"future":{"keep":true}}},
+    {"id":"msg_fixture3","type":"idle","time":{"created":5},"outcome":"succeeded","metadata":{"unknown":[1,true,"retain"]}}
+  ],
+  "cursor":{"previous":"fixture_previous"}
+}

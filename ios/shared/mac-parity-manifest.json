@@ -1,0 +1,81 @@
+{
+  "files": [
+    {
+      "name": "VoicePost.swift",
+      "original_blob_sha256": "b0349d80be4561a6a9407ffe52f7488df50c404098b7cb04b54c0711014ac0bb",
+      "original_path": "app/Sources/FloatingVoiceCore/VoicePost.swift",
+      "packaged_blob_sha256": "b0349d80be4561a6a9407ffe52f7488df50c404098b7cb04b54c0711014ac0bb",
+      "packaged_path": "macos/app/Sources/FloatingVoiceCore/VoicePost.swift",
+      "sanitization": null
+    },
+    {
+      "name": "NoiseFloor.swift",
+      "original_blob_sha256": "c0b75d74ff36caf2886f90e70ee6ad9b3016407e9d3c40f93c8bc8f34284bc57",
+      "original_path": "app/Sources/FloatingVoiceCore/NoiseFloor.swift",
+      "packaged_blob_sha256": "c0b75d74ff36caf2886f90e70ee6ad9b3016407e9d3c40f93c8bc8f34284bc57",
+      "packaged_path": "macos/app/Sources/FloatingVoiceCore/NoiseFloor.swift",
+      "sanitization": null
+    },
+    {
+      "name": "Composer.swift",
+      "original_blob_sha256": "a4907b1f4873a95f0339996bfea2a93cf39692eae52b1ddf1ce752d9c41ca57c",
+      "original_path": "app/Sources/FloatingVoiceCore/Composer.swift",
+      "packaged_blob_sha256": "a4907b1f4873a95f0339996bfea2a93cf39692eae52b1ddf1ce752d9c41ca57c",
+      "packaged_path": "macos/app/Sources/FloatingVoiceCore/Composer.swift",
+      "sanitization": null
+    },
+    {
+      "name": "Settings.swift",
+      "original_blob_sha256": "22c35dc27f95b4840348c591d4240c8bb981e5861e340c5d939e2ec3f5a2000c",
+      "original_path": "app/Sources/FloatingVoiceCore/Settings.swift",
+      "packaged_blob_sha256": "22c35dc27f95b4840348c591d4240c8bb981e5861e340c5d939e2ec3f5a2000c",
+      "packaged_path": "macos/app/Sources/FloatingVoiceCore/Settings.swift",
+      "sanitization": null
+    },
+    {
+      "name": "TurnTaking.swift",
+      "original_blob_sha256": "662e057bd1c4a2533510ef3db416761334fe2ee370bf171111d274d9f0278af2",
+      "original_path": "app/Sources/FloatingVoiceCore/TurnTaking.swift",
+      "packaged_blob_sha256": "662e057bd1c4a2533510ef3db416761334fe2ee370bf171111d274d9f0278af2",
+      "packaged_path": "macos/app/Sources/FloatingVoiceCore/TurnTaking.swift",
+      "sanitization": null
+    },
+    {
+      "name": "Controller.swift",
+      "original_blob_sha256": "7211977940acb6b7aabe497d8739917f606f425bf1f65939ce8f846f54cb3f6e",
+      "original_path": "app/Sources/FloatingVoiceCore/Controller.swift",
+      "packaged_blob_sha256": "228d2facfcb51239ac8bd089f4a40c9e2969166d71d03c0776a41f0e18e8a9d9",
+      "packaged_path": "macos/app/Sources/FloatingVoiceCore/Controller.swift",
+      "sanitization": {
+        "changes": [
+          {
+            "description": "Carry forward the independently reviewed safety region without changing the declared source semantics.",
+            "original_region_sha256": "39a2bfefe28a887fcf9667356c8d6d29b6e13accaf8ef0c35231dccff34a3bfa",
+            "packaged_region_sha256": "923595610ff41c409bfb2c70c1af36182bba280b0db1ba338c95f45a1f6253db"
+          }
+        ],
+        "mapping_id": "mac-safety-carryforward-01"
+      }
+    },
+    {
+      "name": "Speaker.swift",
+      "original_blob_sha256": "b97cb0e27da9c7dbaeec85ebdeec955ff92abb0f1253807771b0e054386b6794",
+      "original_path": "app/Sources/FloatingVoiceCore/Speaker.swift",
+      "packaged_blob_sha256": "b97cb0e27da9c7dbaeec85ebdeec955ff92abb0f1253807771b0e054386b6794",
+      "packaged_path": "macos/app/Sources/FloatingVoiceCore/Speaker.swift",
+      "sanitization": null
+    },
+    {
+      "name": "Pill.swift",
+      "original_blob_sha256": "fc2d5f544723f07f2c07ef70f3cb99fc9440cb31d2dab823ad85b093084d1556",
+      "original_path": "app/Sources/FloatingVoiceCore/Pill.swift",
+      "packaged_blob_sha256": "fc2d5f544723f07f2c07ef70f3cb99fc9440cb31d2dab823ad85b093084d1556",
+      "packaged_path": "macos/app/Sources/FloatingVoiceCore/Pill.swift",
+      "sanitization": null
+    }
+  ],
+  "original_commit": "4c33124f8bf318313e460210ecf55018f648e692",
+  "original_core_prefix": "app/Sources/FloatingVoiceCore/",
+  "packaged_core_prefix": "macos/app/Sources/FloatingVoiceCore/",
+  "schema": 1
+}

@@ -1,0 +1,29 @@
+{
+  "sessionID": "ses_fresh240Session01",
+  "latestPage": {
+    "data": [
+      {"id": "msg_fresh240IdleNewest01", "type": "idle", "time": {"created": 4000}},
+      {
+        "id": "msg_fresh240Answer01", "type": "assistant",
+        "time": {"created": 3000, "completed": 3500},
+        "model": {"providerID": "fictional", "modelID": "fixture-only"},
+        "tokens": {"input": 7, "output": 5}, "finish": "stop",
+        "content": [{"type": "text", "text": "Acknowledged in this throwaway session."}]
+      }
+    ],
+    "cursor": {"previous": null, "next": "fresh240_page_older01"}
+  },
+  "olderPage": {
+    "data": [
+      {"id": "msg_fresh240User01", "type": "user", "time": {"created": 1000}, "text": "[Agent Canvas]\nFictional paper-kite selection."},
+      {"id": "msg_fresh240IdleOlder01", "type": "idle", "time": {"created": 2000}}
+    ],
+    "cursor": {"previous": "fresh240_page_latest01", "next": null}
+  },
+  "toolInputEndedShape": {
+    "id": "evt_fresh240Tool01", "created": 1,
+    "type": "session.tool.input.ended", "location": {"directory": "/synthetic"},
+    "data": {"sessionID": "ses_fresh240Session01", "assistantMessageID": "msg_fresh240Tool01", "id": "tool_fresh240One", "text": "Fictional tool input; not narration."},
+    "durable": {"aggregateID": "ses_fresh240Session01", "seq": 1, "version": 1}
+  }
+}

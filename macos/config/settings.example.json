@@ -1,0 +1,12 @@
+{
+  "target": "ses_example",
+  "asrUrl": "ws://127.0.0.1:8446/v1/transcribe",
+  "ttsUrl": "http://127.0.0.1:8444/v1/audio/speech",
+  "ttsModel": "tts-1",
+  "voice": "alloy",
+  "inputDevice": "default",
+  "outputDevice": "default",
+  "sendMode": "manual",
+  "busyDelivery": "queue",
+  "livePartials": true
+}

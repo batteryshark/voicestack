@@ -1,0 +1,13 @@
+{
+  "data": [
+    {
+      "id": "msg_freshOrdinalAnswer01",
+      "type": "assistant",
+      "time": {"created": 1000, "completed": 2000},
+      "content": [
+        {"type": "reasoning", "text": "Fictional reasoning block for ordinal alignment only."},
+        {"type": "text", "text": "The fictional paper kite is ready."}
+      ]
+    }
+  ]
+}
