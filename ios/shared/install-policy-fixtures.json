@@ -1,0 +1,536 @@
+[
+  {
+    "name": "empty denies",
+    "raw": "https://node.demo.ts.net/manifest.plist",
+    "deploymentSuffix": "",
+    "approvedManifests": [],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2Fmanifest.plist"
+  },
+  {
+    "name": "configured suffix",
+    "raw": "https://node.demo.ts.net/manifest.plist",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [],
+    "expected": true,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2Fmanifest.plist"
+  },
+  {
+    "name": "normalized port path query https://NODE.DEMO.TS.NET.:9443/any/path?build=19",
+    "raw": "https://NODE.DEMO.TS.NET.:9443/any/path?build=19",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [],
+    "expected": true,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2FNODE.DEMO.TS.NET.%3A9443%2Fany%2Fpath%3Fbuild%3D19"
+  },
+  {
+    "name": "normalized port path query https://nested.node.demo.ts.net:443/a+b?x=y+z",
+    "raw": "https://nested.node.demo.ts.net:443/a+b?x=y+z",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [],
+    "expected": true,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnested.node.demo.ts.net%3A443%2Fa%2Bb%3Fx%3Dy%2Bz"
+  },
+  {
+    "name": "normalized port path query https://node.demo.ts.net",
+    "raw": "https://node.demo.ts.net",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [],
+    "expected": true,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net"
+  },
+  {
+    "name": "normalized port path query https://node.demo.ts.net:12345/not-a-plist",
+    "raw": "https://node.demo.ts.net:12345/not-a-plist",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [],
+    "expected": true,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%3A12345%2Fnot-a-plist"
+  },
+  {
+    "name": "other host",
+    "raw": "https://node.other.ts.net/manifest.plist",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://node.other.ts.net/manifest.plist"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.other.ts.net%2Fmanifest.plist"
+  },
+  {
+    "name": "suffix lookalike",
+    "raw": "https://node.demo.ts.net.evil.invalid/a",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://node.demo.ts.net.evil.invalid/a"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net.evil.invalid%2Fa"
+  },
+  {
+    "name": "missing dot lookalike",
+    "raw": "https://xdemo.ts.net/a",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://xdemo.ts.net/a"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fxdemo.ts.net%2Fa"
+  },
+  {
+    "name": "bare deployment domain",
+    "raw": "https://demo.ts.net/a",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://demo.ts.net/a"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fdemo.ts.net%2Fa"
+  },
+  {
+    "name": "bare ts domain",
+    "raw": "https://ts.net/a",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://ts.net/a"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fts.net%2Fa"
+  },
+  {
+    "name": "leading hostname dot",
+    "raw": "https://.node.demo.ts.net/a",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://.node.demo.ts.net/a"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2F.node.demo.ts.net%2Fa"
+  },
+  {
+    "name": "HTTP manifest",
+    "raw": "http://node.demo.ts.net/a",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "http://node.demo.ts.net/a"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=http%3A%2F%2Fnode.demo.ts.net%2Fa"
+  },
+  {
+    "name": "userinfo",
+    "raw": "https://user:pass@node.demo.ts.net/a",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://user:pass@node.demo.ts.net/a"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fuser%3Apass%40node.demo.ts.net%2Fa"
+  },
+  {
+    "name": "empty userinfo",
+    "raw": "https://@node.demo.ts.net/a",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://@node.demo.ts.net/a"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2F%40node.demo.ts.net%2Fa"
+  },
+  {
+    "name": "other manifest scheme",
+    "raw": "ftp://node.demo.ts.net/a",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "ftp://node.demo.ts.net/a"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=ftp%3A%2F%2Fnode.demo.ts.net%2Fa"
+  },
+  {
+    "name": "noncanonical scheme",
+    "raw": "HTTPS://node.demo.ts.net/a",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "HTTPS://node.demo.ts.net/a"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=HTTPS%3A%2F%2Fnode.demo.ts.net%2Fa"
+  },
+  {
+    "name": "fragment",
+    "raw": "https://node.demo.ts.net/a#",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://node.demo.ts.net/a#"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2Fa%23"
+  },
+  {
+    "name": "double trailing dot",
+    "raw": "https://node.demo.ts.net../a",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://node.demo.ts.net../a"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net..%2Fa"
+  },
+  {
+    "name": "empty label",
+    "raw": "https://node..demo.ts.net/a",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://node..demo.ts.net/a"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode..demo.ts.net%2Fa"
+  },
+  {
+    "name": "invalid label",
+    "raw": "https://-node.demo.ts.net/a",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://-node.demo.ts.net/a"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2F-node.demo.ts.net%2Fa"
+  },
+  {
+    "name": "encoded authority",
+    "raw": "https://%6eode.demo.ts.net/a",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://%6eode.demo.ts.net/a"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2F%256eode.demo.ts.net%2Fa"
+  },
+  {
+    "name": "bad port",
+    "raw": "https://node.demo.ts.net:65536/a",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://node.demo.ts.net:65536/a"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%3A65536%2Fa"
+  },
+  {
+    "name": "invalid config .ts.net",
+    "raw": "https://node.demo.ts.net/manifest.plist",
+    "deploymentSuffix": ".ts.net",
+    "approvedManifests": [
+      "https://node.demo.ts.net/manifest.plist"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2Fmanifest.plist"
+  },
+  {
+    "name": "invalid config demo.ts.net",
+    "raw": "https://node.demo.ts.net/manifest.plist",
+    "deploymentSuffix": "demo.ts.net",
+    "approvedManifests": [
+      "https://node.demo.ts.net/manifest.plist"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2Fmanifest.plist"
+  },
+  {
+    "name": "invalid config ..demo.ts.net",
+    "raw": "https://node.demo.ts.net/manifest.plist",
+    "deploymentSuffix": "..demo.ts.net",
+    "approvedManifests": [
+      "https://node.demo.ts.net/manifest.plist"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2Fmanifest.plist"
+  },
+  {
+    "name": "invalid config .demo..ts.net",
+    "raw": "https://node.demo.ts.net/manifest.plist",
+    "deploymentSuffix": ".demo..ts.net",
+    "approvedManifests": [
+      "https://node.demo.ts.net/manifest.plist"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2Fmanifest.plist"
+  },
+  {
+    "name": "invalid config .demo.ts.net.",
+    "raw": "https://node.demo.ts.net/manifest.plist",
+    "deploymentSuffix": ".demo.ts.net.",
+    "approvedManifests": [
+      "https://node.demo.ts.net/manifest.plist"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2Fmanifest.plist"
+  },
+  {
+    "name": "invalid config .DEMO.TS.NET",
+    "raw": "https://node.demo.ts.net/manifest.plist",
+    "deploymentSuffix": ".DEMO.TS.NET",
+    "approvedManifests": [
+      "https://node.demo.ts.net/manifest.plist"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2Fmanifest.plist"
+  },
+  {
+    "name": "invalid config .demo.invalid",
+    "raw": "https://node.demo.ts.net/manifest.plist",
+    "deploymentSuffix": ".demo.invalid",
+    "approvedManifests": [
+      "https://node.demo.ts.net/manifest.plist"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2Fmanifest.plist"
+  },
+  {
+    "name": "invalid config  ",
+    "raw": "https://node.demo.ts.net/manifest.plist",
+    "deploymentSuffix": " ",
+    "approvedManifests": [
+      "https://node.demo.ts.net/manifest.plist"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2Fmanifest.plist"
+  },
+  {
+    "name": "invalid config .-demo.ts.net",
+    "raw": "https://node.demo.ts.net/manifest.plist",
+    "deploymentSuffix": ".-demo.ts.net",
+    "approvedManifests": [
+      "https://node.demo.ts.net/manifest.plist"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2Fmanifest.plist"
+  },
+  {
+    "name": "exact list only",
+    "raw": "https://node.demo.ts.net/manifest.plist",
+    "deploymentSuffix": "",
+    "approvedManifests": [
+      "https://node.demo.ts.net/manifest.plist"
+    ],
+    "expected": true,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2Fmanifest.plist"
+  },
+  {
+    "name": "exact uppercase trailing-dot list",
+    "raw": "https://NODE.DEMO.TS.NET./manifest.plist",
+    "deploymentSuffix": "",
+    "approvedManifests": [
+      "https://NODE.DEMO.TS.NET./manifest.plist"
+    ],
+    "expected": true,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2FNODE.DEMO.TS.NET.%2Fmanifest.plist"
+  },
+  {
+    "name": "raw case mismatch",
+    "raw": "https://NODE.DEMO.TS.NET./manifest.plist",
+    "deploymentSuffix": "",
+    "approvedManifests": [
+      "https://node.demo.ts.net/manifest.plist"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2FNODE.DEMO.TS.NET.%2Fmanifest.plist"
+  },
+  {
+    "name": "raw trailing dot mismatch",
+    "raw": "https://node.demo.ts.net./manifest.plist",
+    "deploymentSuffix": "",
+    "approvedManifests": [
+      "https://node.demo.ts.net/manifest.plist"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net.%2Fmanifest.plist"
+  },
+  {
+    "name": "suffix and exact list",
+    "raw": "https://node.demo.ts.net/manifest.plist",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://node.demo.ts.net/manifest.plist"
+    ],
+    "expected": true,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2Fmanifest.plist"
+  },
+  {
+    "name": "suffix list mismatch",
+    "raw": "https://node.demo.ts.net/manifest.plist",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://node.demo.ts.net/manifest.plist/other"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2Fmanifest.plist"
+  },
+  {
+    "name": "list cannot bypass suffix",
+    "raw": "https://node.other.ts.net/a",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://node.other.ts.net/a"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.other.ts.net%2Fa"
+  },
+  {
+    "name": "literal plus unescaped wrapper",
+    "raw": "https://node.demo.ts.net/a+b?x=y+z",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://node.demo.ts.net/a+b?x=y+z"
+    ],
+    "expected": true,
+    "url": "itms-services://?action=download-manifest&url=https://node.demo.ts.net/a+b?x=y+z"
+  },
+  {
+    "name": "plain HTTPS",
+    "raw": "https://node.demo.ts.net/manifest.plist",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://node.demo.ts.net/manifest.plist"
+    ],
+    "expected": false,
+    "url": "https://node.demo.ts.net/manifest.plist"
+  },
+  {
+    "name": "other outer scheme",
+    "raw": "https://node.demo.ts.net/manifest.plist",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://node.demo.ts.net/manifest.plist"
+    ],
+    "expected": false,
+    "url": "https://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2Fmanifest.plist"
+  },
+  {
+    "name": "uppercase outer scheme",
+    "raw": "https://node.demo.ts.net/manifest.plist",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://node.demo.ts.net/manifest.plist"
+    ],
+    "expected": false,
+    "url": "ITMS-SERVICES://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2Fmanifest.plist"
+  },
+  {
+    "name": "action",
+    "raw": "https://node.demo.ts.net/manifest.plist",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://node.demo.ts.net/manifest.plist"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=other&url=https%3A%2F%2Fnode.demo.ts.net%2Fmanifest.plist"
+  },
+  {
+    "name": "outer userinfo",
+    "raw": "https://node.demo.ts.net/manifest.plist",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://node.demo.ts.net/manifest.plist"
+    ],
+    "expected": false,
+    "url": "itms-services://user@?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2Fmanifest.plist"
+  },
+  {
+    "name": "outer path",
+    "raw": "https://node.demo.ts.net/manifest.plist",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://node.demo.ts.net/manifest.plist"
+    ],
+    "expected": false,
+    "url": "itms-services:///path?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2Fmanifest.plist"
+  },
+  {
+    "name": "duplicate action",
+    "raw": "https://node.demo.ts.net/manifest.plist",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://node.demo.ts.net/manifest.plist"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2Fmanifest.plist&action=download-manifest"
+  },
+  {
+    "name": "duplicate url",
+    "raw": "https://node.demo.ts.net/manifest.plist",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://node.demo.ts.net/manifest.plist"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2Fmanifest.plist&url=https%3A%2F%2Fnode.demo.ts.net%2Fmanifest.plist"
+  },
+  {
+    "name": "extra query",
+    "raw": "https://node.demo.ts.net/manifest.plist",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://node.demo.ts.net/manifest.plist"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2Fmanifest.plist&extra=1"
+  },
+  {
+    "name": "outer fragment",
+    "raw": "https://node.demo.ts.net/manifest.plist",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://node.demo.ts.net/manifest.plist"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2Fmanifest.plist#"
+  },
+  {
+    "name": "invalid percent",
+    "raw": "https://node.demo.ts.net/manifest.plist",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": [
+      "https://node.demo.ts.net/manifest.plist"
+    ],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2Fmanifest.plist&%ZZ=x"
+  }
+  ,{
+    "name": "list only explicit other deployment",
+    "raw": "https://node.other.ts.net/a",
+    "deploymentSuffix": "",
+    "approvedManifests": ["https://node.other.ts.net/a"],
+    "expected": true,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.other.ts.net%2Fa"
+  },{
+    "name": "list only bare ts domain",
+    "raw": "https://ts.net/a",
+    "deploymentSuffix": "",
+    "approvedManifests": ["https://ts.net/a"],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fts.net%2Fa"
+  },{
+    "name": "list only leading dot",
+    "raw": "https://.demo.ts.net/a",
+    "deploymentSuffix": "",
+    "approvedManifests": ["https://.demo.ts.net/a"],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2F.demo.ts.net%2Fa"
+  },{
+    "name": "malformed inner percent",
+    "raw": "https://node.demo.ts.net/%ZZ",
+    "deploymentSuffix": "",
+    "approvedManifests": ["https://node.demo.ts.net/%ZZ"],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2F%25ZZ"
+  },{
+    "name": "malformed outer percent",
+    "raw": "https://node.demo.ts.net/%ZZ",
+    "deploymentSuffix": ".demo.ts.net",
+    "approvedManifests": ["https://node.demo.ts.net/%ZZ"],
+    "expected": false,
+    "url": "itms-services://?action=download-manifest&url=https%3A%2F%2Fnode.demo.ts.net%2F%ZZ"
+  }
+]

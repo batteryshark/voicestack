@@ -1,0 +1,17 @@
+.DS_Store
+**/.build/
+**/build/
+**/output/
+**/private/
+**/logs/
+**/wt/
+**/node_modules/
+**/__pycache__/
+*.p8
+*.p12
+*.mobileprovision
+*.ipa
+*.xcarchive/
+.env
+*.local.*
+**/xcuserdata/

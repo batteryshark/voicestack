@@ -1,0 +1,8 @@
+# Local private/generated state must not enter git-archive source releases.
+**/private export-ignore
+**/output export-ignore
+**/build export-ignore
+**/.build export-ignore
+**/node_modules export-ignore
+**/*.local.* export-ignore
+.env export-ignore

@@ -1,0 +1,37 @@
+{
+  "request": {
+    "id": "b21-urgent-20261015-1",
+    "session": "ses_example0000000000000000000",
+    "kind": "urgent-call",
+    "reason": "decision",
+    "title": "Synthetic legacy call",
+    "body": "Fixture only."
+  },
+  "createdAt": 1792121400000,
+  "expiry": 1792125000000,
+  "callUUID": "00000000-0000-4000-8000-000000000001",
+  "callExpiry": 1792121460000,
+  "testOverride": {
+    "runID": "b22-20261016",
+    "reachoutID": "b21-urgent-20261015-1",
+    "session": "ses_example0000000000000000000",
+    "build": 22,
+    "deviceID": "phone",
+    "issuedAt": 1792121400000,
+    "expiresAt": 1792122000000,
+    "quietHoursOnly": true,
+    "consumedAt": 1792121400000,
+    "approvalSHA256": "fixture-only-not-an-approval"
+  },
+  "targets": {
+    "d:phone": {
+      "deviceID": "phone",
+      "reason": "urgent-eligible",
+      "state": "call-intent",
+      "callAttemptAt": 1792121400000,
+      "ringDeadline": 1792121430000,
+      "fallbackDeadline": 1792121445000,
+      "reservedFallback": true
+    }
+  }
+}

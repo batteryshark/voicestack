@@ -1,0 +1,7 @@
+{
+  "data": [
+    {"id":"msg_fixture1","type":"user","time":{"created":1},"text":"Synthetic question","files":[{"data":"AA==","mime":"image/png","source":{"type":"inline"},"name":"fixture.png","description":"Synthetic attachment"}],"agents":[],"skills":[]},
+    {"id":"msg_fixture2","type":"assistant","agent":"general","model":{"id":"synthetic","providerID":"synthetic"},"time":{"created":2},"content":[{"type":"text","text":"Already visible. "},{"type":"reasoning","text":"Synthetic reasoning"},{"type":"tool","id":"tool_fixture","name":"synthetic","state":{"status":"completed","input":{},"content":[{"type":"file","uri":"data:image/png;base64,AA==","mime":"image/png","name":"fixture.png"}]},"time":{"created":2,"completed":2}}],"metadata":{"future":{"keep":true}}}
+  ],
+  "cursor":{"next":"fixture_next"}
+}

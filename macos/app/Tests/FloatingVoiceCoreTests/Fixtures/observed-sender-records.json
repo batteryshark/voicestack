@@ -1,0 +1,34 @@
+{
+  "event": {
+    "id": "evt_syntheticObserved",
+    "created": 1700000000000,
+    "type": "session.inbox.enqueued",
+    "location": {
+      "directory": "/example/project"
+    },
+    "data": {
+      "inboxID": "msg_syntheticObserved",
+      "sessionID": "ses_syntheticFixture",
+      "item": {
+        "type": "user",
+        "payload": {
+          "text": "Synthetic protocol event fixture."
+        },
+        "delivery": "steer"
+      }
+    },
+    "durable": {
+      "aggregateID": "ses_syntheticFixture",
+      "seq": 1,
+      "version": 1
+    }
+  },
+  "history": {
+    "id": "msg_syntheticObserved",
+    "time": {
+      "created": 1700000000000
+    },
+    "text": "From the Voicestack iPhone lead: Synthetic review fixture ready.",
+    "type": "user"
+  }
+}
