@@ -2,18 +2,18 @@
 
 ![Voicestack](macos/app/Icon/AppIcon-1024.png)
 
-Two independent voice clients for OpenChamber: a floating macOS pill and a native iPhone companion. This is a **local, sanitized source review snapshot**, not a supported binary distribution. No source histories or live configuration are included.
+Two independent voice clients for OpenChamber: a floating macOS pill and a native iPhone companion. This is a **source/docs-only review candidate**, not a supported binary distribution. Original development histories and live configuration are not included. The source base is the independently reviewed, parentless commit `37f8a5bf06628dff14769587f841c4cbad08f98b`; this candidate adds factual README corrections only. Both app source owners have consented to source distribution and private GitHub export, conditional on final privacy review, push controls and the limitations below. This is not public-release approval.
 
 Voicestack is an **independent project used alongside Workstack**, not a Workstack
 kit or submodule. It retains its own name and original selected logos, outside
 Workstack's comic-mascot styling. Using it with the harness is optional; this
 classification does not change the client/service requirements below.
 
-**Canvas source build r5 completed locally and was independently corroborated.**
+**Historical Canvas source build r5 completed locally and was independently corroborated.**
 The existing macOS arm64 Node 26.10.0/esbuild 0.25.12 toolchain built the exact
 4,008 inputs plus reviewed metadata, all six resources, and published the success
 manifest after observed child close. The earlier resolver-metadata failure and
-incomplete attempts remain historical provenance, not current build status.
+incomplete attempts remain historical provenance. This candidate was not rebuilt.
 Independent review checked hashes/metafile/transforms/source freshness and passed
 16 pure lifecycle checks; it did not rebuild or run browser/native code. This is
 a source-only recipe/pins release form, **not package/release clearance or a
@@ -21,8 +21,8 @@ distributable app**. See the [renderer status and limits](ios/bridge/renderer/RE
 
 ## What is here
 
-- `macos/`: prospective private source based on original Mac `4c33124f8bf318313e460210ecf55018f648e692`. The paired selection includes declared safety, synthetic, frozen R3 and sparse ROBUSTNESS adaptations only at their declared destinations; it is not a raw-commit-exact copy. A floating pill with live captions when the recognition server supports partials, configurable input/output devices, automatic or manual Send, discard, sender labels, and `[voice]` attribution on spoken submissions. Its speech clients use external servers; it does not start them.
-- `ios/`: prospective private source based on original phone `7b81fb6a48c34b124f1b6d7563c98424f40290b4`, with the paired selection's declared adaptations, not raw-commit-exact source. Native CallKit calling, turn-taking, sender labels, history and Canvas panels, quiet-hours policy, notifications and urgent calls, and a separate revocable OpenChamber client identity through the bridge. The owner report of build 31 installed and accepted on real calls is historical only, not acceptance of this proposed pair or native/release proof; this adapted source pair has **not** been compiled or device-tested.
+- `macos/`: source based on original Mac `4c33124f8bf318313e460210ecf55018f648e692`. The paired selection includes declared safety, synthetic, frozen R3 and sparse ROBUSTNESS adaptations only at their declared destinations; it is not a raw-commit-exact copy. A floating pill with live captions when the recognition server supports partials, configurable input/output devices, automatic or manual Send, discard, sender labels, and `[voice]` attribution on spoken submissions. Its speech clients use external servers; it does not start them.
+- `ios/`: source based on original phone `7b81fb6a48c34b124f1b6d7563c98424f40290b4`, with the paired selection's declared adaptations, not raw-commit-exact source. Native CallKit calling, turn-taking, sender labels, history and Canvas panels, quiet-hours policy, notifications and urgent calls, and a separate revocable OpenChamber client identity through the bridge. The owner report of build 31 installed and accepted on real calls is historical only, not acceptance of this adapted pair or native/release proof; this adapted source pair has **not** been compiled or device-tested.
 - The accepted Graphite / icon 1 artwork is retained byte-for-byte in both app resource locations. These are icons, not screenshots.
 
 The apps do not import a speculative shared core. Their similarly named Swift files have intentionally remained independent.
@@ -88,7 +88,7 @@ and still requires the custom WebSocket contract above.
 
 Set `target` to your own session ID, or use `chief` with your own chief-pointer JSON (`session` field). `FV_TARGET` and `FV_CHIEF_FILE` are overrides. A Chief-kit install is optional if you select an explicit session. `FV_OPENCHAMBER_URL` selects a configured desktop API endpoint; no live session identifiers are shipped.
 
-After you independently start OpenChamber and your speech servers, open your development app, select devices and target, then Start voice. Automatic mode sends after configured pauses; manual mode holds words for Send (including the configurable global shortcut). Discard clears held words. Captions distinguish your speech, the assistant and external senders. Stop voice when finished. The app pauses rather than fighting agent-voice for microphone ownership. This staging task did not open the app or microphone.
+After you independently start OpenChamber and your speech servers, open your development app, select devices and target, then Start voice. Automatic mode sends after configured pauses; manual mode holds words for Send (including the configurable global shortcut). Discard clears held words. Captions distinguish your speech, the assistant and external senders. Stop voice when finished. The app pauses rather than fighting agent-voice for microphone ownership. Candidate preparation did not open the app or microphone.
 
 ## iPhone: development setup and use
 
@@ -99,7 +99,7 @@ bridge/device routes and credentials. The bridge uses loopback speech ports and
 does not forward an arbitrary provider key. Cloud substitution needs an
 operator-managed compatible proxy/adapter or code changes, not simply a cloud URL.
 
-The staged iPhone namespace is `org.example.voicestack`, with an empty team. Choose an identifier and signing team you own for an independent development app; APNs topic must match. This changes only these staged sources. The installed app, its identifier, Keychain identity, credentials and owner checkout are untouched. This copy is not an update/migration package for the accepted app.
+The example iPhone namespace is `org.example.voicestack`, with an empty team. Choose an identifier and signing team you own for an independent development app; APNs topic must match. Configure only your independent development copy. The installed app, its identifier, Keychain identity, credentials and owner checkout are untouched by candidate preparation. This copy is not an update/migration package for the accepted app.
 
 First follow the renderer recipe with a fresh ignored `ios/output` direct child;
 keep the same explicit `FV_CANVAS_RESOURCES` for resource verification, bridge
@@ -110,29 +110,47 @@ output. The project generator is local-only Python:
 python3 ios/native/build.py generate
 ```
 
-First create `ios/private` yourself as an owner-owned mode-0700 directory (no symlink ancestors). Generation exclusively publishes a new mode-0600 `ios/private/NativeInfo.plist`, with empty bootstrap by default, without contacting Apple or building. Existing output is refused, not replaced. The build recipe's `unsigned`/`archive` actions require explicit `FV_ALLOW_BUILD=1`; an archive also requires your signing team and pre-provisioned resources. Automatic provisioning downloads are disabled. These build actions were **not run** for staging, and their success is unknown. No install, launch, simulator, OTA or proof-delivery recipe is provided here.
+First create `ios/private` yourself as an owner-owned mode-0700 directory (no symlink ancestors). Generation exclusively publishes a new mode-0600 `ios/private/NativeInfo.plist`, with empty bootstrap by default, without contacting Apple or building. Existing output is refused, not replaced. The build recipe's `unsigned`/`archive` actions require explicit `FV_ALLOW_BUILD=1`; an archive also requires your signing team and pre-provisioned resources. Automatic provisioning downloads are disabled. These build actions were **not run** for this candidate, and their success is unknown. No install, launch, simulator, OTA or proof-delivery recipe is provided here.
 
-**Fresh enrollment configuration:** the pinned app reads its one-use bootstrap from signed configuration, not a runtime pairing-entry screen. Explicit `FV_BUILD_MODE=ENROLL` accepts one operator-selected private JSON file or JSON environment input; see [ios/SETUP.md](ios/SETUP.md). Never pass a secret on the command line. Enrollment-signed apps contain a redeemable one-use secret: protect the app and all build artifacts, then regenerate empty UPDATE configuration after enrollment. This source/configuration path is fixture-tested only, not signing or pairing acceptance.
+**Fresh enrollment configuration:** the pinned app reads its one-use bootstrap from signed configuration, not a runtime pairing-entry screen. Explicit `FV_BUILD_MODE=ENROLL` accepts one operator-selected private JSON file or JSON environment input; see [ios/SETUP.md](ios/SETUP.md). Never pass a secret on the command line. Enrollment-signed apps contain a redeemable one-use secret: protect the app and all build artifacts, then regenerate empty UPDATE configuration after enrollment. Historical fixture checks of this configuration path do not establish testing of this adapted candidate, signing or pairing acceptance.
 
 Once separately provisioned and paired, choose the intended session in the app and start/answer a call. History and sender labels accompany voice; Canvas uses the preflighted local bridge renderer output. Configure notification/call permissions and quiet hours deliberately. Urgent calls are policy-limited, not Critical Alerts or a Focus bypass. Revoke the dedicated desktop client in OpenChamber to cut off paired bridge access; authenticated rejection fails closed rather than borrowing someone else's credentials. The inherited absent-binding legacy mode is not proof of authentication: enroll the dedicated client explicitly. Do not assume locked/background call behavior is accepted.
 
 ## Validation and release boundaries
 
-Secure first-enrollment and own-client preflight have selected local-fixture
+Historically, secure first-enrollment and own-client preflight had selected local-fixture
 acceptance, including the corrected nonzero origin port gate (1–65535). Canvas
 r5 has the bounded source-build corroboration above, not native acceptance.
 Further copied-resource review completed 13 named checks, then stopped with
 overall Node 1 when a later raw-path refusal assertion returned normally; its
 exact case/count was not journaled. Complete consumer/unsafe-path execution
 coverage remains unresolved; no product defect is proved by that outcome.
-Other staging checks cover syntax, plist/project/resource references, synthetic
+Other historical staging checks covered syntax, plist/project/resource references, synthetic
 protocol fixtures and isolated Python configuration generation. No Swift
 compilation, full-suite acceptance, app/browser execution, live pairing/provider
 call, signing, device/simulator action or service activation was performed.
+**UNRUN for this candidate:** actual committed PACKAGE21, negative guards, native
+compilation, device/live calls and full suites. Source review is not test execution.
+
+**DO NOT RUN the retained frozen R3 direct-reader/PACKAGE21 path.** Static review
+identified post-reap process-group killing, unbounded waiting, child-registration
+and global-deadline concerns. Execution remains blocked; these are static execution
+risks, not reproduced app/host failures. The separately reviewed R4 proposal is
+unassembled, unexecuted and excluded from this candidate; it does not repair the
+retained reader by implication.
+
+The accepted sparse ROBUSTNESS Store/test overlay is source-only. Original Store
+admission remains blocked; the overlay is not a newly admitted original Store.
+Missing prefixes can leave gaps undisplayed indefinitely, with per-arrival/per-key
+narration independent of display materialization. No durable gap recovery or exact
+display/narration correspondence is promised. Its test declarations were not run.
+Seven original source Git modes remain unknown. Chosen ordinary package modes
+are distribution-format choices, not evidence of those original modes.
+
 Some retained integration tests intentionally open sockets or exercise audio;
 do **not** run whole suites as an offline check without reviewing containment.
 
-Original owned Voicestack source/documentation is now MIT under [LICENSE](LICENSE), as approved by the principal. [RIGHTS.md](RIGHTS.md) defines the scope and supersedes only stale owned-code pending-license statements in preserved dependency/nested docs and metadata. Outside dependencies, libraries, compilers, vendor binaries, models, reference audio/media, artwork and generated resources receive no new grant. Preserve [THIRD_PARTY.md](THIRD_PARTY.md), the Canvas MIT license and all existing notices and dependency/source-availability obligations. Native/signing/device/browser/clean-install acceptance, dependency resolution on other hosts, a standard secret scanner, release privacy review, principal logo approval, further genuine privacy-safe captures, model/reference rights and third-party binary rights remain unestablished. Mermaid/Fastdom/ELK binary redistribution stays parked; no license waiver or all-platform/hermetic build proof is implied. Generated third-party resources, compiler and node_modules must stay out of Git and source archives. No audio, models, private state, source history or credentials are included. Only the selected cleared captures below are included. The earlier local snapshot's no-commit/no-remote/no-push status is historical, not a claim about any future unified candidate commit. Previously reported build/validation results remain historical and do not validate this proposed pair; no push or release is authorized by this proposal.
+Original owned Voicestack source/documentation is MIT under [LICENSE](LICENSE), as approved by the principal. This also covers exactly the eight retained, accepted original agent-drawn icon PNGs (Q87); Voicestack keeps its approved original identity. [RIGHTS.md](RIGHTS.md) defines the scope and supersedes only stale owned-code pending-license statements in preserved dependency/nested docs and metadata. Outside dependencies, libraries, compilers, vendor binaries, models, reference audio/media, other artwork and generated resources receive no new grant. Source-export consent grants no additional rights to fixtures, captured data or third-party weights. Preserve [THIRD_PARTY.md](THIRD_PARTY.md), the Canvas MIT license and all existing notices and dependency/source-availability obligations. Native/signing/device/browser/clean-install acceptance and dependency resolution on other hosts remain unestablished. Final whole-exposure privacy/secret review is a separate requirement; this README does not assert its outcome. Model/reference rights and third-party binary rights remain separate. Mermaid/Fastdom/ELK binary redistribution stays parked; no license waiver or all-platform/hermetic build proof is implied. Generated third-party resources, compiler and node_modules must stay out of Git and source archives. No user audio, models, private deployment state, original development history or credentials are supplied as release inputs. Only the selected cleared captures below are included. The original source-review artifact remains immutable; this local candidate adds only README facts. Previously reported build/validation results remain historical and do not validate this adapted pair. Private pushes remain held under Q105; publication requires separate per-item approval.
 
 ## Selected independent Voicestack captures
 
@@ -156,7 +174,7 @@ Full real iPhone build 36 History latest with two fictional trail replies and a 
 
 Full real iPhone build 36 frame showing Sessions and settings controls for session, send/queue, pause, sensitivity, voice and speaker. Settings coverage is partial, not exhaustive.
 
-These four full phone frames show real build 36 UI with fictional trail-plan content, no keyboard or visible AssistiveTouch. They are not native test results, call/ASR acceptance, source-code-pin acceptance or proof of expanded reasoning. These images do not validate the proposed adapted `4c`/`7b81` source pair. Mac `153c34c`, iOS `ce4d180` / stable build 31 and private baseline `459788dc5fc9a82d96b0b1d9562c95d2fa6eba32` remain unchanged historical bindings, not this proposed pair's source identity. Voicestack retains its independent original identity; these selected images do not clear other imaging, functional, native, install, version, history, privacy, rights or publication gates.
+These four full phone frames show real build 36 UI with fictional trail-plan content, no keyboard or visible AssistiveTouch. They are not native test results, call/ASR acceptance, source-code-pin acceptance or proof of expanded reasoning. These images do not validate the adapted `4c`/`7b81` source pair. Mac `153c34c`, iOS `ce4d180` / stable build 31 and private baseline `459788dc5fc9a82d96b0b1d9562c95d2fa6eba32` remain unchanged historical bindings, not this pair's source identity. Voicestack retains its independent original identity; these selected images do not clear other imaging, functional, native, install, version, history, privacy, rights or publication gates.
 
 # Correction lane policy/build notes
 
