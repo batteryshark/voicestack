@@ -30,14 +30,17 @@ and current source hashes before serving.
 ## Binary redistribution
 
 Generated JS/CSS, four browser libraries, compiler binaries and `node_modules`
-aren't distributed here. Don't commit them or attach generated apps/bundles to
-releases while these obligations remain unresolved:
+aren't distributed here. Keep them out of this source tree and its source archives.
+A generated app or browser bundle carries the licenses of its included dependencies;
+the root MIT license doesn't replace those conditions.
 
-- Mermaid has 20 unmatched embedded-version notice pairs.
-- Patched Fastdom provenance needs resolution.
-- ELK has preferred-form Java source and EPL retrieval obligations.
-- Tailwind/Chart/D3 embedded-input and notice correspondence isn't fully cleared.
-
-Retaining historical notices doesn't resolve those obligations. The root MIT
-license covers owned code/docs and the specified icons, without waiving any
-third-party conditions. Models and reference media need their own usable rights.
+For binary distribution, retain corresponding dependency notices and satisfy
+source-availability requirements, including ELK's EPL preferred-form Java source
+and retrieval conditions. The historical packaging review recorded 20 unmatched
+Mermaid embedded-version/notice pairs, patched Fastdom provenance questions and
+incomplete Tailwind/Chart/D3 embedded-input/notice correspondence. Reconcile those
+records against the exact output being distributed; the historical notice bundle
+alone doesn't establish coverage for a new build. These are binary-packaging
+review items, not an established license defect in the source release. No binary
+distribution clearance is supplied here. Models and reference media need their
+own usable rights.

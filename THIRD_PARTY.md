@@ -38,6 +38,6 @@ SOFTWARE.
 
 The exact pinned notice bundle remains in
 `ios/bridge/renderer/assets/THIRD_PARTY_NOTICES.md`.
-See [DEPENDENCIES.md](DEPENDENCIES.md) for the historical manifest, withheld
-compiled files and unresolved completeness/redistribution review. Retaining
+See [DEPENDENCIES.md](DEPENDENCIES.md) for the historical manifest, excluded
+compiled files and binary-distribution notice/source conditions. Retaining
 notices is not a grant of rights that an upstream license does not supply.

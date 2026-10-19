@@ -20,6 +20,13 @@ responses and WebSocket upgrades. No DNS, Tailscale, service or proxy config is
 activated by these files. A fictitious route shape is
 `https://bridge.example.ts.net:9443/floating-voice`; it is not a usable address.
 
+The phone never connects directly to an OpenCode server. Its `/v1` bridge routes,
+device credential and target-generation lease are separate from desktop-client
+authentication. The bridge requires OpenChamber's `/health` identity,
+`/api/system/info` desktop runtime and `/api/client-auth` enrollment; Canvas uses
+its guest service API. Shared OpenCode V2 session routes don't make a standalone
+server a drop-in backend. See [backend compatibility](../docs/DEVELOPMENT.md#backend-compatibility).
+
 The shipped app replaces configured speech URLs/keys with bridge routes and its
 device credential; that credential is not a cloud provider key. The bridge uses
 loopback speech ports and does not forward arbitrary provider keys. Cloud speech
@@ -76,6 +83,47 @@ Setup order:
    diagnostic/push state beside the supplied credential store. The pinned legacy
    absent-binding path is not authenticated enrollment; provision a real own
    client before use. Once paired, removal/rejection fails closed.
+
+## Agent-initiated alerts and calls
+
+Reach-out is an explicit tool action by the configured caller, separate from
+automatic assistant-prose playback during active voice. Give that agent authorized
+shell/tool access to `bridge/reachout.mjs`; the repository doesn't install an agent
+tool or grant permission to use it. The sender connects to the owner-only
+`ios/private/push/sender.sock` (0600 inside 0700 directories). It doesn't prompt
+a session or expose a public send endpoint.
+
+The bridge's `readChief()` reads the `session` field of the operator's
+`~/.chief-of-staff/chief.json`. `PushService.send()` requires the request's
+`session` to equal that current ID, checks that the session exists, and checks
+an optional `messageID` against its message record. An arbitrary session selected
+in the phone UI doesn't acquire caller authority. An explicit target suffices for
+ordinary conversation; this reach-out path needs the caller pointer too.
+
+The sender's `send` command takes `--kind`, `--reason`, `--session`, a unique
+`--id`, `--title` and `--body`. Allowed intents are `need` (decision/hands/stuck),
+`ready-to-try` (install/build), and `urgent-call` (decision/goal-risk). Review
+`bridge/reachout.mjs` before granting tool access. Its `--dry-run` validates only
+the schema; it doesn't evaluate live delivery policy. Use `status --id ID` after
+an uncertain send; don't retry blindly or substitute a new ID.
+
+Push delivery requires `FV_PUSH_ENABLED=1`, APNs credentials, enrolled device
+tokens and native notification permission. Urgent calls use APNs VoIP pushes,
+PushKit and CallKit; answering resolves the origin and starts that session's
+voice loop. The request body supplies reach-out context, not text to synthesize.
+Alerts use generic lock-screen text and retrieve context after the user opens them.
+
+Calls need fresh synced settings, calls enabled, a valid time zone, no outstanding
+call and a quiet-hours window that covers ringing. Defaults are 22:00–09:00 quiet
+hours, 15-minute call spacing, three calls/day and six notifications/hour.
+Ineligible calls can become ordinary alerts, subject to token and notification
+limits; quiet hours restrict calls, not every alert. The native app rechecks call
+policy, and CallKit can reject a call under Do Not Disturb or other OS restrictions.
+There is no Focus bypass or Critical Alerts entitlement. The development override
+only relaxes spacing/daily/notification caps; it doesn't bypass quiet hours or
+outstanding-call safety. Locked/background delivery remains unverified for this
+combined source copy. [Development notes](../docs/DEVELOPMENT.md) cover native
+cut-in and route limits.
 
 ## Optional service/proxy design
 

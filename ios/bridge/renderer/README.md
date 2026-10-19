@@ -85,7 +85,8 @@ External npm packages can contain compiled artifacts. They are read/copied only
 for the operator's personal local build, including `.work` scratch, never into
 Git, source archives or release assets; compiler and node_modules stay out too.
 Dependency resolution on other hosts, clean installation and native/browser
-behavior remain unverified. Don't redistribute the output app or bundles while
-Mermaid's embedded-version notice gaps, patched Fastdom provenance and ELK
-preferred-source obligations remain unresolved. Keep original notices and Canvas
-MIT attribution for the 14 copied source files.
+behavior remain unverified. Before distributing a generated app or bundle,
+match its embedded dependency versions to notices and satisfy applicable
+preferred-source obligations; [DEPENDENCIES.md](../../../DEPENDENCIES.md) records
+the binary-packaging review items. Keep original notices and Canvas MIT
+attribution for the 14 copied source files.

@@ -1,5 +1,85 @@
 # Development notes
 
+## Backend compatibility
+
+The supported setup is OpenChamber desktop backed by OpenCode. The two native
+clients share session concepts, but use different transports:
+
+- Mac `OpenChamberClient.connect()` chooses `FV_OPENCHAMBER_URL`, then
+  `OPENCHAMBER_PORT`, then `desktopLocalPort` from settings under
+  `OPENCHAMBER_DATA_DIR` or `~/.config/openchamber`. It requires
+  `GET /api/system/info` with `runtime: "desktop"`. That request has no Bearer
+  header; subsequent requests use `OPENCHAMBER_BEARER` when supplied. The Mac app
+  doesn't implement desktop-client enrollment. An auth-protected identity
+  endpoint needs client changes; supplying a Bearer variable alone won't fix it.
+- The iPhone connects to HTTPS `/floating-voice` on its Mac bridge, using its own
+  device Bearer credential and target-generation header. The bridge discovers
+  OpenChamber's loopback port, verifies `/health` with `openchamberVersion`, uses
+  its enrolled desktop-client token, and requires the same desktop runtime check.
+  Enrollment uses `/api/client-auth/pairing/redeem`. Canvas also needs the
+  OpenChamber guest service route `/api/guests/agent-canvas/service/request`.
+
+Session traffic uses `GET /api/session`, `/api/session/active`, session detail,
+`GET /api/event`, `POST /api/session/{id}/prompt` with `text`, optional
+`delivery: "queue"|"steer"` and `resume: false` for silent admission, and
+`POST /api/session/{id}/interrupt?resume=false`. Clients expect `data` response
+envelopes, prompt receipt `data.id`, `interrupted`, and event JSON with
+`type`, `data.sessionID`, text deltas and block ordinals. Phone history additionally
+uses paginated `/api/session/{id}/message` and individual message records.
+
+The current official [OpenCode V2 API](https://opencode.ai/v2/docs/api) and
+[OpenAPI contract](https://opencode.ai/v2/openapi.json) expose these session routes
+and matching prompt/interrupt fields. Its server identity is `/api/info`, and its
+pairing routes are `/api/pair` and `/auth/connect/{code}`. The
+[V2 client guide](https://opencode.ai/v2/docs/build/client) documents explicit
+authentication headers and local service discovery/authentication; neither
+Voicestack transport uses that discovery flow. The contract doesn't advertise
+OpenChamber's desktop identity, client-auth or guest Canvas routes. The published
+event schema is a JSON-encoded string, so the route alone doesn't establish every
+event payload detail. A direct OpenCode adapter looks feasible for basic session
+conversation, but requires discovery/auth changes and event validation; phone
+Canvas needs its own replacement integration. No direct-server interoperability
+was demonstrated. Changing a URL alone doesn't remove these requirements.
+
+## Conversation behavior
+
+Both controllers send utterance PCM to the custom ASR WebSocket while recording.
+Partial transcripts update captions when the service supplies them; committed
+words and silence determine turn submission. Manual mode holds words for Send.
+The default busy delivery is Queue; select Steer to send into a running turn.
+
+Assistant text events are cleaned and segmented into sentences automatically.
+Fenced blocks and images are omitted from speech; links keep their labels.
+Reasoning and tool-result events aren't a speech source. The phone reconciles
+live narration with its conversation store; ordinary history loads silently.
+There is no tool-selected speech endpoint in either client. Agent instructions
+can shape audible prose versus fenced reading material, but exclusive explicit
+speech selection would need code changes. Reach-out tools choose the alert/call
+intent and context, not a TTS utterance.
+
+`ttsStream` defaults false (whole-sentence WAV). With it enabled, compatible
+services provide raw PCM chunks that play as they arrive. This is streamed ASR,
+session text and TTS, not an OpenAI Realtime session or an end-to-end latency
+guarantee.
+
+Mac capture continues during playback only with `duplex` enabled and an echo-safe
+input/output arrangement. The iPhone trusts the receiver; external routes need an
+actual non-built-in microphone. Its built-in speaker suppresses recognition during
+playback and the configured quiet tail. Tap to cut in silences narration and
+reopens listening after a short guard; words wholly inside that guard can be lost.
+Both cores include acknowledgement-aware duck/pause/restore decisions on safe
+routes. `bargeInAborts` defaults false: stopping speech doesn't cancel execution.
+Explicit reply interruption does. Native acknowledgement-aware cut-in, route
+changes and locked/background calls remain unverified in this combined copy.
+
+For comparison, OpenChamber's upstream voice documentation and
+`packages/ui/src/lib/voice/browserVoiceService.ts` at
+[`bf977d2`](https://github.com/openchamber/openchamber/tree/bf977d2ed89c079ec592210d7cd0e2d649ba0636)
+describe dictation, several playback/recognition backends and conversation-mode
+auto-resume after speech. The dedicated-client rationale is native controls and
+the bridge reach-out workflow; it doesn't establish missing call or interruption
+features in OpenChamber.
+
 ## Source selection
 
 Mac: `4c33124f8bf318313e460210ecf55018f648e692` plus the tracked source delta through `e259a757c4d2a570c574dcf5055419173e4cea5a`. The lifecycle observer bounds new diagnostic records to 120 per explicit voice start, at most one per second. It records software state, not audible-output measurements. The existing distribution's private-configuration and build-path adaptations remain in place.
@@ -18,6 +98,6 @@ The sparse conversation store can leave a missing prefix undisplayed indefinitel
 
 ## Build evidence limits
 
-This combined distribution hasn't been compiled, signed or exercised on a device. No microphone, simulator, speech server or live desktop session was used during preparation. The phone captures are genuine build 36 UI with approved fictional content; they don't establish that this source copy produces that build or that calls work.
+This combined distribution hasn't been compiled, signed or exercised on a device. Native builds, full test suites, live pairing and calls weren't run during preparation. No microphone, simulator, speech server or live desktop session was used. The phone captures are genuine build 36 UI with approved fictional content; they don't establish that this source copy produces that build or that calls work. The Mac screenshot has no visible build label.
 
 An earlier renderer source build completed on macOS arm64 with Node 26.10.0 and esbuild 0.25.12. Independent inspection corroborated its source/output hashes and selected lifecycle checks, without rebuilding or running browser/native code. Subsequent resource checks had incomplete unsafe-path coverage. These historical results don't validate a new build. The dependency recipe requires exact inputs; clean installation and other hosts remain unverified.

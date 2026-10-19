@@ -10,12 +10,22 @@ On Mac, choose your microphone, speaker and target session. Automatic mode sends
 
 <img src="assets/screenshots/q88-phone-01b-main-idle-after-reply-run1.png" alt="iPhone conversation showing fictional trail plans, voice off" width="280"> <img src="assets/screenshots/q88-phone-03-history-top-table-code-run1.png" alt="iPhone History with a fictional trail table and packing checklist" width="280">
 
-The phone captures show real build 36 UI with fictional trail-plan content. [More captures](assets/screenshots/) include recent history and settings. The Mac capture has no visible build label. This source copy hasn't been device-tested.
+[More screenshots](assets/screenshots/)
+
+## Why use a dedicated voice client?
+
+[OpenChamber's built-in voice mode](https://github.com/openchamber/openchamber/blob/bf977d2ed89c079ec592210d7cd0e2d649ba0636/packages/docs/content/docs/voice.mdx) provides dictation and reply playback inside its interface, with several speech backends. Its browser voice service also supports resuming listening after playback. Voicestack puts the conversation in a floating Mac control or a native iPhone call, with microphone and speaker controls close at hand. The phone keeps History and Canvas available alongside the conversation.
+
+Speak, watch your words appear as recognition arrives, and pause to send a turn, or hold it for manual Send. Replies play sentence by sentence as the agent writes; compatible speech services can stream audio too. On an echo-safe route you can cut into playback and continue the conversation. On the iPhone speaker, use Tap to cut in before talking. Queue or Steer controls how new words reach a busy agent, and cutting off playback doesn't cancel its work by default.
+
+The configured caller agent can use the bridge's reach-out sender to request an iPhone alert when it needs a decision or has something ready to try, or an incoming call for an urgent decision. Answering opens a voice conversation with the originating session. This requires authorized tool access and configured push delivery; call permissions, quiet hours, rate limits and Focus still apply. [iPhone setup](ios/SETUP.md#agent-initiated-alerts-and-calls) covers that tool path.
+
+During voice mode, Voicestack automatically speaks the selected session's assistant prose. The agent can keep a spoken answer short and put longer material in fenced blocks that remain available to read. Tool results and reasoning aren't narrated. See [conversation behavior](docs/DEVELOPMENT.md#conversation-behavior) for route-specific interruption limits.
 
 ## What you need
 
 - macOS 14+ and Swift 6 tools (Swift 5 language mode). The iPhone app targets iOS 17+ and needs Xcode with Icon Composer support, an iOS SDK, your own Apple signing team and push capabilities. Native `.icon` compilation uses Xcode 26-class tooling; the Mac script also supports PNG-to-ICNS with Command Line Tools.
-- OpenChamber desktop with an agent session. The clients use its desktop API; OpenCode alone doesn't supply that API.
+- OpenChamber desktop with an OpenCode agent session. Both clients currently require OpenChamber-specific discovery and identity checks around OpenCode's session API. A standalone OpenCode V2 server isn't a supported direct connection; [backend details](docs/DEVELOPMENT.md#backend-compatibility) explain the protocol overlap and platform differences.
 - Separately operated speech recognition and synthesis services. The apps connect to them; they don't start or stop servers. [local-speech-servers](https://github.com/batteryshark/local-speech-servers) is a separate project. Models, voices, reference recordings and provider credentials aren't included.
 - For iPhone: a Mac bridge, Node with built-in fetch and global WebSocket (a recent Node 22 or newer), Python 3.10+, and a private HTTPS/tailnet route. Canvas also requires the [pinned renderer dependency tree and local build](ios/bridge/renderer/README.md). Only darwin-arm64 has an admitted renderer compiler hash.
 
@@ -38,7 +48,7 @@ Copy [settings.example.json](macos/config/settings.example.json) to `~/.config/f
 - `asrUrl` and `ttsUrl` to compatible speech endpoints. Use an operator-registered `voice` or `default`; the example's `alloy` requires a voice registered under that name. `ttsModel` doesn't select the local gateway backend.
 - `sendMode` to `manual` or your preferred automatic setting, then select input/output devices in the app.
 
-`FV_OPENCHAMBER_URL` selects a desktop API endpoint. Existing agent-voice settings can supply speech defaults and are read only; Voicestack settings override them. Keep API keys outside Git. Mac speech requests support separate ASR/TTS Bearer keys.
+`FV_OPENCHAMBER_URL` selects an OpenChamber desktop endpoint; `OPENCHAMBER_PORT` overrides port discovery. Otherwise the app reads `desktopLocalPort` from OpenChamber settings. Review [desktop authentication](docs/DEVELOPMENT.md#backend-compatibility) before connecting to an auth-protected endpoint. Existing agent-voice settings can supply speech defaults and are read only; Voicestack settings override them. Keep API keys outside Git. Mac speech requests support separate ASR/TTS Bearer keys.
 
 Start OpenChamber and the speech services separately. Open your development app, allow microphone access, select a target and choose Start voice. Manual Send also has a configurable global shortcut. Stop voice when finished. The app pauses when agent-voice owns the microphone.
 
@@ -66,14 +76,6 @@ TTS uses the `/v1/audio/speech` subset with WAV or streamed headerless mono 24 k
 
 Review endpoint authentication and audio retention before connecting. A remote endpoint sends audio off the machine. A cloud TTS URL isn't a verified drop-in replacement: health probes and voice discovery can affect the client even when synthesis itself works.
 
-## Source and development status
-
-The Mac source includes the changes through `e259a757`, including bounded lifecycle diagnostics and reconnect/restart test cases. The iPhone source is based on `7b81fb6a`; its app/bridge/native/shared code matches the later source head `169348bb` before the distribution adaptations. Private configuration, portable build paths, synthetic fixtures and the sparse conversation-store adaptation are retained. See [development notes](docs/DEVELOPMENT.md) for exact source pins and test cautions.
-
-This combined source copy hasn't been compiled or device-tested. Locked/background calling and acknowledgement-aware cut-in remain unverified. Sparse history can leave missing prefixes undisplayed indefinitely; spoken arrivals and displayed history can differ. Native builds, signing, live pairing, calls and full test suites weren't run during preparation.
-
-Don't run the retained `mac_parity_reader.py`/PACKAGE21 path: its process supervision has known static safety risks. Some other tests open sockets or exercise native audio; review them individually before execution. Canvas dependency provisioning and clean-machine builds also remain unverified. Generated apps and browser bundles have [unresolved third-party redistribution obligations](DEPENDENCIES.md).
-
 ## License
 
-Original Voicestack source, documentation and the selected original icon PNGs are [MIT licensed](LICENSE). Voicestack retains its independent branding. [RIGHTS.md](RIGHTS.md) defines the artwork scope; [THIRD_PARTY.md](THIRD_PARTY.md) preserves dependency attribution. Models, voices, reference media and generated third-party resources carry their own rights.
+Original Voicestack source, documentation and the selected original icon PNGs are [MIT licensed](LICENSE). [RIGHTS.md](RIGHTS.md) defines the artwork scope; [THIRD_PARTY.md](THIRD_PARTY.md) and [DEPENDENCIES.md](DEPENDENCIES.md) cover third-party notices and conditions.
