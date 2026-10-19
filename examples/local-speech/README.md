@@ -125,7 +125,9 @@ to configure these servers.
 
 Keep all listeners on loopback. Optional `SPEECHD_STT_API_KEY` and
 `SPEECHD_TTS_API_KEY` require Bearer auth on speech requests; the TTS key also
-protects default-voice mutation and gateway model administration. Mac clients
+protects default-voice mutation and gateway model administration. Model
+administration is unsupported with this pinned Breeze recipe; the retained
+gateway forwarding routes require a different compatible upstream. Mac clients
 can supply speech keys; the phone bridge needs compatible upstream auth routing.
 Health and voice listing are unauthenticated, and there is no TLS or per-user
 isolation. Other local users can reach loopback listeners. Keep references,

@@ -29,9 +29,11 @@ of every dependency you redistribute.
 ## Breeze server
 
 Obtain [Breeze source at `f1818ec44da33302701718e5fb15267ce1cf5e4f`](https://github.com/Shoofio/breeze-tts2-fast-streaming-api/tree/f1818ec44da33302701718e5fb15267ce1cf5e4f)
-separately. Its root licence is Apache-2.0. The gateway requires `/health`, voice
-list/delete/upload, multipart `/v1/audio/speech` returning mono 24 kHz s16le,
-and `/admin/model/load|unload` for its admin forwarding routes.
+separately. Its root licence is Apache-2.0. The gateway uses `/health`, voice
+list/delete/upload, and multipart `/v1/audio/speech` returning mono 24 kHz s16le.
+This pinned Breeze revision has no `/admin/model/load|unload` endpoints, so model
+administration is unsupported with this recipe. The gateway retains forwarding
+routes for those operations; using them requires a different compatible upstream.
 
 Use a separate Python environment. That revision's `requirements.txt` pins MLX
 Audio `e1b19b9054bf163f5d812221a54fcc346f1890e9` on macOS arm64. Its

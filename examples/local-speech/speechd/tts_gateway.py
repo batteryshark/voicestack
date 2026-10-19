@@ -14,7 +14,7 @@ codec prompt is cached there. A request for voice "default" (or none) gets the s
 GET /v1/voices lists the voices and the default. Requests queue here (FIFO) instead of getting Breeze's 409 busy. A client that
 disconnects cancels its request: the upstream connection is closed, and Breeze stops generating within a chunk.
 
-    python -m speechd.tts_gateway --upstream http://127.0.0.1:8450 --voices voices --port 8444
+    python -m speechd.tts_gateway --upstream http://127.0.0.1:8450 --voices /path/to/private/references --state /path/to/private/gateway-state --default-voice reference --port 8444
 """
 import argparse
 import asyncio
