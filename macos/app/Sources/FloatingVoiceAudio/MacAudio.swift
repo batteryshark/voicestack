@@ -83,6 +83,7 @@ public final class MacAudio: AudioInput, AutomaticCutInOutput, LevelReporting {
     /// Playback level (RMS of the speech player's output as it renders), for the visualizer.
     public var onLevel: ((Double) -> Void)?
     public var onFailure: ((Error) -> Void)?
+    public var onDiagnosticConfiguration: (() -> Void)?
     public private(set) var echo: (effective: Bool, reason: String)?
     public private(set) var capturing = false
     /// Mic live while speaking is safe only with echo cancellation on, or with headphones / Bluetooth output
@@ -120,6 +121,15 @@ public final class MacAudio: AudioInput, AutomaticCutInOutput, LevelReporting {
 
     public init(config: @escaping () -> VoiceConfig, log: @escaping (String) -> Void = { _ in }) {
         self.config = config; self.log = log
+    }
+
+    /// Read-only software state, not output signal/audibility. No node getters on unsafe graphs.
+    public func diagnosticSnapshot() -> String {
+        let graph = AudioLifecycleDiagnostics.safeGraph(running && readySent && !graphRepair.inProgress) {
+            guard engine.isRunning else { return "graph=stopped engine=false" }
+            return "graph=current engine=true player=\(player.isPlaying) gain=\(AudioLifecycleDiagnostics.gain(player.volume)) mixer=\(AudioLifecycleDiagnostics.gain(engine.mainMixerNode.outputVolume))"
+        }
+        return "generation=\(generation) ready=\(readySent) capturing=\(capturing) running=\(running) paused=\(automaticCutInPaused) \(graph)"
     }
 
     // Offline test seam: installs a real manual-render graph, never opens a device.
@@ -307,6 +317,7 @@ public final class MacAudio: AudioInput, AutomaticCutInOutput, LevelReporting {
             MainActor.assumeIsolated {
                 guard let self, self.running else { return }
                 self.lastConfigurationChange = Date()
+                self.onDiagnosticConfiguration?()
                 guard !self.engine.isRunning, !self.readySent, restarts < 3, Date() < deadline else { return }
                 restarts += 1
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in

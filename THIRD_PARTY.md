@@ -1,7 +1,8 @@
-# Third-party attribution — not a project license
+# Third-party attribution
 
-Original Voicestack licensing is pending. The following does not license unrelated
-Voicestack code or artwork. Existing source adaptation comments are retained.
+Original Voicestack source and documentation use the root [MIT license](LICENSE).
+The following notices cover source adaptations and dependencies; artwork scope
+is described in [RIGHTS.md](RIGHTS.md).
 
 ## agent-voice
 

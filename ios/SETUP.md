@@ -1,13 +1,14 @@
-# iPhone development setup (not activation)
+# iPhone development setup
 
-This guide describes configuration boundaries. It did not start anything.
-Canvas r5 completed on the existing local macOS arm64 toolchain, with independent
-artifact/source corroboration, not an independent rebuild or native/browser run.
-Secure first-enrollment and own-client preflight have selected local-fixture
-acceptance, including the nonzero 1–65535 origin port gate. Consumer unsafe-path
-execution coverage remains incomplete; native/signing/device/browser/clean-install
-acceptance and the root README's release gates remain unestablished. This is not
-an installable working deployment.
+The iPhone app uses a Mac bridge, separate speech services and its own revocable
+OpenChamber desktop client. Configure an independent development deployment with
+your own private route, signing identity and credentials. Native builds, signing
+and live enrollment haven't been tested for this source copy.
+
+Commands below use `ios` as the working directory unless stated otherwise.
+The environment examples are references: fill them privately and explicitly
+export the variables needed by each process; the Python generator doesn't load
+an env file automatically.
 
 ## Bridge and external services
 
@@ -32,7 +33,7 @@ voice stems or `default`, not an assumed OpenAI catalog. Model changes are
 deployment/adapter work, not arbitrary drop-ins. Provider authentication, formats
 and data handling need separate review; no cloud calls or automatic fallback are implied.
 
-Operator setup order, on an independently approved development deployment:
+Setup order:
 
 0. Follow the [renderer recipe](bridge/renderer/README.md) to build and verify
    resources in a **fresh ignored direct child** of owner-owned, non-symlink
@@ -49,7 +50,7 @@ Operator setup order, on an independently approved development deployment:
    binding metadata only. Default state is `ios/private/openchamber`, or an
    explicit `FV_OC_CLIENT_DIR` shared with the bridge. Never borrow another
    application's client token. Redemption is one-shot; uncertain results require
-   operator review/revocation, not retries. This procedure was not executed here.
+    operator review/revocation, not retries.
 3. Independently provision a fresh owner-only bridge credential store. The bridge
    CLI exposes `provision PRIVATE_STORE PRIVATE_PAIRING_CONFIG`,
    `serve PRIVATE_STORE PORT`, and `revoke PRIVATE_STORE DEVICE_ID`. Paths must
@@ -60,7 +61,7 @@ Operator setup order, on an independently approved development deployment:
    Apple team and topic outside Git. Push is opt-in with `FV_PUSH_ENABLED=1`;
    do not enable it merely to check configuration. Apple keys/profiles are not
    included. Enrollment, token rotation and revocation remain operator actions.
-5. Before any independently authorized install/start action, run the **offline**
+ 5. Before starting the bridge, run the **offline**
    preflight with the same `FV_OC_CLIENT_DIR` used by enrollment and the bridge:
    `node bridge/deployment-preflight.mjs`. No arguments or secret values are accepted.
    It requires private `client.json` and `identity.json`, matching Voicestack dedupe

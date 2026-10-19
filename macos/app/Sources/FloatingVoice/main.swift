@@ -14,6 +14,7 @@ final class VoiceModel {
     let pill = PillModel()
     let settingsState = SettingsState()
     let runLog = FileLog.forThisRun()
+    private(set) var audioDiagnostics: AudioLifecycleDiagnostics!
     let hotkey = GlobalHotkey()
     let discardHotkey = GlobalHotkey(purpose: "Discard")
     private lazy var discardBinding = DiscardShortcutBinding(
@@ -28,7 +29,11 @@ final class VoiceModel {
     init() {
         let settings = SettingsStore.load()
         let runLog = self.runLog
-        let log: (String) -> Void = { line in runLog.write(line) }
+        var observe: ((AudioLifecycleDiagnostics.Stage) -> Void)?
+        let log: (String) -> Void = { line in
+            runLog.write(line)
+            if let stage = AudioLifecycleDiagnostics.stage(for: line) { observe?(stage) }
+        }
         // Audio and speech read the controller's current voice settings, so changes apply without a restart.
         final class Ref { weak var controller: ConversationController? }
         let ref = Ref()
@@ -43,6 +48,9 @@ final class VoiceModel {
                                             partialsProbe: { await ServiceChecks.partialsAdvertised(partialsConfig) },
                                              speechWarmup: warmup, log: log)
         ref.controller = controller
+        audioDiagnostics = AudioLifecycleDiagnostics(write: { runLog.write($0) })
+        observe = { [weak self] stage in self?.diagnose(stage) }
+        audio.onDiagnosticConfiguration = { [weak self] in self?.diagnose(.graphConfig) }
         controller.outcomeDiagnostics = UtteranceOutcomeLog(write: { value, _ in
             if let data = try? JSONEncoder().encode(value), let json = String(data: data, encoding: .utf8) {
                 runLog.write("utterance.outcome " + json)
@@ -153,7 +161,15 @@ final class VoiceModel {
     }
 
     func toggleVoice() {
-        if controller.status.running { controller.endVoice() } else { Task { await controller.start() } }
+        if controller.status.running { controller.endVoice() }
+        else {
+            audioDiagnostics.beginVoiceRun()
+            Task { await controller.start() }
+        }
+    }
+
+    func diagnose(_ stage: AudioLifecycleDiagnostics.Stage) {
+        audioDiagnostics.record(stage, audio: audio, active: controller.speaker.active, busy: controller.status.busy, queued: controller.speaker.queuedCount)
     }
 
     func change(_ c: SettingChange) {
@@ -270,7 +286,7 @@ final class PanelController {
         actions.toggleMic = { [weak model] in guard let c = model?.controller else { return }; c.setMicMuted(!c.status.micMuted) }
         actions.toggleOutput = { [weak model] in guard let c = model?.controller else { return }; c.setOutputMuted(!c.status.outputMuted) }
         actions.startVoice = { [weak model] in guard let m = model, !m.controller.status.running else { return }; m.toggleVoice() }
-        actions.stopReply = { [weak model] in Task { await model?.controller.stopReply() } }
+        actions.stopReply = { [weak model] in model?.diagnose(.stopEntry); Task { await model?.controller.stopReply() } }
         actions.send = { [weak model] in model?.controller.send() }
         actions.discard = { [weak model] in model?.controller.discardPending() }
         panel.discardIfEligible = { [weak model] in

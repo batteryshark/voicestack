@@ -1,35 +1,15 @@
 # Canvas: personal source builds
 
-**Current verification status: r5 completed on the existing macOS arm64 toolchain.**
-Node 26.10.0/esbuild 0.25.12 built the exact 4,008 content inputs plus 208 reviewed
-metadata files across 189 roots, with all six resources and the success manifest
-published after observed child close. Source extraction, declarations and the
-694-entry dependency lock are present. Independent review corroborated actual
-hashes, full metafile equality, three guarded transforms and the 20-source
-freshness map; it independently passed 16 pure lifecycle checks. It did **not**
-rebuild or execute browser/native code. Actual selected-input equality does not
-certify all latent resolver branches (16 proved/seven conditional static routes).
+The phone bridge serves Canvas from locally built resources. This recipe checks
+exact input hashes and produces renderer JS/CSS plus four browser libraries.
+Generated dependencies aren't included in this repository.
 
-Historical attempts include the `react-remove-scroll-bar/constants` metadata
-resolution failure, a startup abort and r4's emitted files without a success
-manifest. Their receipts remain history; r5's clean completion does not uniquely
-prove r4's pending await. No feature was dropped or import externalized.
-
-Further independent copied-resource checks completed 10 variants: fresh, stale
-source, tampered output, missing manifest, missing library, wrong pin, symlinked
-library, unsafe parent mode, incomplete set and stale manifest. Default-path
-fresh and two containment checks brought the completed named checks to **13**.
-A later raw-path refusal assertion returned normally; the exact case/count is
-unknown because the harness did not journal iterations. Overall Node 1, stopped
-without retry. This is **not a complete consumer or unsafe-path pass**, nor a
-proved product defect. Complete unsafe-path execution coverage remains unresolved.
-The earlier ancestor-lstat permission failure remains historical evidence.
-
-Generated dependencies are **not** distributed by this source repository. The
-owned Canvas subset is pinned MIT source; Voicestack itself has no new license.
-Historical `manifest.json` and `assets/THIRD_PARTY_NOTICES.md` remain historical
-evidence, separate from `source-lock.json` and each new output manifest. The
-historical notice has 258 package sections; it is not future binary clearance.
+The owned source uses the root MIT license; copied Canvas source retains
+`CANVAS-LICENSE`. Historical `manifest.json` and
+`assets/THIRD_PARTY_NOTICES.md` are separate from `source-lock.json` and each
+new output manifest. See [dependency obligations](../../../DEPENDENCIES.md)
+before redistributing any generated output and
+[development notes](../../../docs/DEVELOPMENT.md) for build evidence limits.
 
 ## Build prerequisites
 
@@ -99,17 +79,13 @@ preflights that same path before configuration writes. The Mac pill has no local
 Canvas consumer; its independent build is not gated on unused bridge assets.
 No Swift/WebView asset dependency is invented or copied into that app.
 
-## Redistribution remains parked
+## Redistribution
 
 External npm packages can contain compiled artifacts. They are read/copied only
 for the operator's personal local build, including `.work` scratch, never into
 Git, source archives or release assets; compiler and node_modules stay out too.
-This is a source-only recipe/pins release form, not package/release clearance or
-a distributable app. Dependency resolution on other hosts, clean installation,
-native/signing/device/browser behavior, standard scanning, owned-code licensing,
-principal logos and model/reference/third-party binary rights remain unestablished.
-Do not redistribute the output app or
-bundles on the strength of this recipe. Mermaid's 20 embedded-version notice
-gaps, patched Fastdom and ELK preferred-source obligations remain unresolved.
-No rights waiver or new owned-code license is made. Original notices and Canvas
-MIT attribution are retained for the actually copied 14 source files.
+Dependency resolution on other hosts, clean installation and native/browser
+behavior remain unverified. Don't redistribute the output app or bundles while
+Mermaid's embedded-version notice gaps, patched Fastdom provenance and ELK
+preferred-source obligations remain unresolved. Keep original notices and Canvas
+MIT attribution for the 14 copied source files.
