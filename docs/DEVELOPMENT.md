@@ -90,6 +90,10 @@ iPhone: `7b81fb6a48c34b124f1b6d7563c98424f40290b4`; comparison with `169348bb460
 
 ## Test safety
 
+The optional [local speech reference](../examples/local-speech/#offline-checks)
+has a focused stdlib fixture command that doesn't start servers or load models.
+Its inference dependencies are separate from the apps and bridge.
+
 Don't run `ios/native/mac_parity_reader.py` or its retained PACKAGE21 path. Static review identified post-reap process-group killing, unbounded waits, child-registration and global-deadline risks. The separate R4 replacement proposal isn't included. No execution of the retained reader is recommended.
 
 Review tests individually: some open sockets, spawn fixture processes or exercise native audio. Whole-suite execution isn't an offline validation command. Seven original source Git modes weren't available; ordinary distribution modes don't reconstruct those modes.

@@ -1,0 +1,6 @@
+# Python 3.12, Apple Silicon macOS. Direct versions from the reference baseline.
+# Transitive dependencies are resolved at install time; this is not a full lock.
+aiohttp==3.14.5
+numpy==2.5.4
+transcribe-cpp==0.4.0
+mlx-audio[stt] @ git+https://github.com/Blaizzy/mlx-audio@e66ad2ff4eb96ce1149000187b30370cbcd707aa

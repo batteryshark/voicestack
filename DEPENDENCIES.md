@@ -5,6 +5,11 @@ SDKs; iPhone signing also requires your own team and development profile.
 OpenChamber, speech services, models, voices and reference media are separately
 operated prerequisites.
 
+The optional [local speech reference](examples/local-speech/) includes MIT wrapper
+source. Its [dependency and model notices](examples/local-speech/NOTICES.md)
+cover the separately obtained inference libraries, Breeze server, models and
+reference-voice permissions. These aren't dependencies of the native app builds.
+
 ## Canvas renderer
 
 The iPhone bridge serves locally generated Canvas resources. The Mac pill has

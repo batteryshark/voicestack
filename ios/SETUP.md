@@ -40,6 +40,9 @@ voice stems or `default`, not an assumed OpenAI catalog. Model changes are
 deployment/adapter work, not arbitrary drop-ins. Provider authentication, formats
 and data handling need separate review; no cloud calls or automatic fallback are implied.
 
+The optional [local speech reference](../examples/local-speech/) supplies matching
+ASR and TTS wrappers for a separately configured loopback deployment.
+
 Setup order:
 
 0. Follow the [renderer recipe](bridge/renderer/README.md) to build and verify
