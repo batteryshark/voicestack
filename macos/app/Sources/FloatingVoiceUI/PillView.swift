@@ -5,8 +5,6 @@ import FloatingVoiceCore
 @MainActor
 public struct PillActions {
     public var toggleVoice: () -> Void = {}
-    /// The power button shown while voice is off.
-    public var startVoice: () -> Void = {}
     public var toggleMic: () -> Void = {}
     public var toggleOutput: () -> Void = {}
     public var stopReply: () -> Void = {}
@@ -26,11 +24,33 @@ public struct PillActions {
     public var dragEnded: () -> Void = {}
     public var hover: (Bool) -> Void = { _ in }
     public init() {}
+
+    /// Shared app/control-test binding. Stop is synchronous even while Start is suspended.
+    public static func voiceToggle(controller: ConversationController, willStart: @escaping () -> Void = {}) -> () -> Void {
+        { [weak controller] in
+            guard let controller else { return }
+            if controller.status.running { controller.endVoice() }
+            else { willStart(); Task { await controller.start() } }
+        }
+    }
+
+    /// The app and headless control checks use the same action routing, without changing controller policy.
+    public static func conversation(controller: ConversationController, willStart: @escaping () -> Void = {},
+                                    willStopReply: @escaping () -> Void = {}) -> PillActions {
+        var actions = PillActions()
+        actions.toggleVoice = voiceToggle(controller: controller, willStart: willStart)
+        actions.toggleMic = { [weak controller] in guard let c = controller else { return }; c.setMicMuted(!c.status.micMuted) }
+        actions.toggleOutput = { [weak controller] in guard let c = controller else { return }; c.setOutputMuted(!c.status.outputMuted) }
+        actions.stopReply = { [weak controller] in willStopReply(); Task { await controller?.stopReply() } }
+        actions.send = { [weak controller] in controller?.send() }
+        actions.discard = { [weak controller] in controller?.discardPending() }
+        return actions
+    }
 }
 
 /// The whole floating module in one shape. It is laid out at `motion.size`, the size the panel has this frame, and
 /// morphs between the resting pill and the card: the control row rides the bottom edge (the visualizer widens, the
-/// gear turns into Stop), the words are revealed above it, and settings cross-fade in.
+/// compact gear makes room for labelled mutes), the words are revealed above it, and settings cross-fade in.
 public struct PillRootView: View {
     @ObservedObject var model: PillModel
     @ObservedObject var settings: SettingsState
@@ -149,8 +169,7 @@ struct PillEdges<S: InsettableShape>: View {
 
 // MARK: Control row
 
-/// Visualizer on the left, buttons on the right, pinned to the bottom edge. In the pill: mic, speaker, gear. In the
-/// card: (Send,) mic, speaker, Stop, with Stop taking the gear's place in the corner.
+/// Global power and independent mutes, with unsent Send/Discard. Stop reply belongs to the card header.
 struct ControlRow: View {
     @ObservedObject var model: PillModel
     @ObservedObject var settings: SettingsState
@@ -158,12 +177,37 @@ struct ControlRow: View {
     let p: Double
     @Environment(\.pillTheme) private var theme
 
+    var card: Double { smoothstep(0.5, 1, p) }
+    var spacing: CGFloat { lerp(4, model.status.pendingSpeech && model.status.manualSend ? 2 : 6, p) }
+    var powerWidth: CGFloat { PillLayout.button }
+    var discardWidth: CGFloat { lerp(28, 56, card) }
+    var sendWidth: CGFloat { CGFloat(card) * 44 }
+    var micWidth: CGFloat { lerp(28, 82, card) }
+    var outputWidth: CGFloat { lerp(28, 110, card) }
+    /// The same control is present throughout startup, mute, errors and full off.
+    var voiceControl: VoiceToggleButton? {
+        VoiceToggleButton(status: model.status, width: powerWidth, action: actions.toggleVoice)
+    }
+    var micControl: MuteButton { MuteButton(muted: model.micMuted, agent: false, expanded: card > 0.95, width: micWidth, action: actions.toggleMic) }
+    var outputControl: MuteButton { MuteButton(muted: model.outputMuted, agent: true, expanded: card > 0.95, width: outputWidth, action: actions.toggleOutput) }
+    /// Includes row insets; the visualizer takes only the remaining space, never pushes controls out.
+    var fixedControlsWidth: CGFloat {
+        let running = model.status.running
+        let corner = PillLayout.button * CGFloat(1 - card)
+        var width = 24 + powerWidth + corner + spacing
+        if running { width += micWidth + outputWidth + 2 * spacing }
+        if model.status.pendingSpeech { width += discardWidth + spacing }
+        if running && model.status.manualSend { width += sendWidth + CGFloat(card) * spacing }
+        width -= spacing * CGFloat(card) // the compact gear slot closes, including its gap
+        return width
+    }
+
     var body: some View {
         let running = model.status.running
-        let card = smoothstep(0.5, 1, p)
+        GeometryReader { geometry in
         HStack(spacing: 0) {
             VisualizerView(levels: model.levels, voice: model.voice, dimmed: model.dimmed || !running)
-                .frame(width: lerp(running ? 52 : 34, model.status.pendingSpeech ? 40 : 92, p), height: 22)
+                .frame(width: max(0, min(lerp(running ? 24 : 34, model.status.pendingSpeech ? 40 : 92, p), geometry.size.width - fixedControlsWidth)), height: 22)
                 .allowsHitTesting(false)
                 .overlay(alignment: .topTrailing) {
                     if model.hasError {
@@ -180,45 +224,35 @@ struct ControlRow: View {
                     }
                 }
                 .padding(.leading, 16)
-            Spacer(minLength: 10)
-            HStack(spacing: 6) {
+            Spacer(minLength: 0)
+            HStack(spacing: spacing) {
                 if model.status.pendingSpeech {
-                    DiscardButton(action: actions.discard)
+                    DiscardButton(iconOnly: card < 0.95, textOnly: true, action: actions.discard)
+                        .fixedSize()
+                        .frame(width: discardWidth)
                 }
                 if running && model.status.manualSend {
-                    SendButton(holding: model.you.holding, hotkey: hotkeyLabel, action: actions.send)
+                    SendButton(holding: model.you.holding, hotkey: hotkeyLabel, textOnly: true, action: actions.send)
                         .fixedSize()
-                        .frame(width: CGFloat(card) * 74, alignment: .trailing)
+                        .frame(width: sendWidth, alignment: .trailing)
                         .opacity(card)
-                        .padding(.trailing, CGFloat(card) * 6 - 6)
+                        .padding(.trailing, CGFloat(card) * spacing - spacing)
                         .allowsHitTesting(card > 0.9)
                 }
+                voiceControl
                 if running {
-                    CircleButton(symbol: model.micMuted ? "mic.slash.fill" : "mic.fill", active: model.micMuted,
-                                 help: model.micMuted ? "Unmute mic" : "Mute mic", action: actions.toggleMic)
-                    CircleButton(symbol: model.outputMuted ? "speaker.slash.fill" : "speaker.wave.2.fill", active: model.outputMuted,
-                                 help: model.outputMuted ? "Unmute agent voice" : "Mute agent voice", action: actions.toggleOutput)
-                } else {
-                    StartButton(action: actions.startVoice)
+                    micControl
+                    outputControl
                 }
-                // The corner slot: the gear in the pill, Stop in the card.
-                ZStack {
-                    CircleButton(symbol: "gearshape.fill", active: false, plain: true, help: "Settings", action: actions.openSettings)
+                // Compact Settings remains unchanged; the expanded header owns Settings and Stop reply.
+                CircleButton(symbol: "gearshape.fill", active: false, plain: true, help: "Settings", action: actions.openSettings)
                         .opacity(1 - card)
                         .allowsHitTesting(card < 0.5)
-                    if running {
-                        CircleButton(symbol: "stop.fill", active: false, accent: model.status.speaking ? theme.chief : nil,
-                                     help: "Stop: stop speaking and interrupt \(model.assistantName)'s turn", action: actions.stopReply)
-                            .opacity(card)
-                            .scaleEffect(0.7 + 0.3 * card)
-                            .allowsHitTesting(card >= 0.5)
-                    }
-                }
-                // Voice off: the card has no Stop, so the slot closes up.
-                .frame(width: running ? PillLayout.button : PillLayout.button * CGFloat(1 - card), height: PillLayout.button)
-                .padding(.leading, running ? 0 : -6 * CGFloat(card))
+                        .frame(width: PillLayout.button * CGFloat(1 - card), height: PillLayout.button)
+                        .padding(.leading, -spacing * CGFloat(card))
             }
             .padding(.trailing, PillLayout.inset)
+        }
         }
     }
 
@@ -234,6 +268,10 @@ struct CardTop: View {
     let content: CardContent
     let actions: PillActions
     @Environment(\.pillTheme) private var theme
+
+    var replyControl: ReplyStopButton? {
+        model.status.running ? ReplyStopButton(action: actions.stopReply) : nil
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -268,12 +306,14 @@ struct CardTop: View {
                 Spacer(minLength: 4)
                 if let cue = countdownCue {
                     CountdownCue(wait: cue, action: actions.send)
+                        .fixedSize()
                         .transition(.opacity)
                 }
+                replyControl.fixedSize()
                 Button(action: actions.openSettings) {
                     Image(systemName: "gearshape.fill").font(.system(size: 11, weight: .medium))
                         .foregroundStyle(theme.secondary)
-                        .frame(width: 22, height: 22).contentShape(Rectangle())
+                        .frame(width: PillLayout.button, height: PillLayout.button).contentShape(Rectangle())
                 }
                 .buttonStyle(PressStyle())
                 .help("Settings")
@@ -307,7 +347,7 @@ struct CardTop: View {
         .frame(width: PillLayout.cardWidth, alignment: .topLeading)
     }
 
-    /// "Chief of staff · a10001": the attached session's title and a short id.
+    /// "Chief of staff · SYNTHE": the attached session's title and a short id.
     var title: String { model.status.targetLabel ?? (model.status.running ? "No session yet" : "Voicestack") }
 
     var countdownCue: PillModel.Wait? {
@@ -482,17 +522,20 @@ struct ErrorBanner: View {
 
 struct DiscardButton: View {
     var compact = false
+    var iconOnly = false
+    var textOnly = false
     let action: () -> Void
     @Environment(\.pillTheme) private var theme
     var body: some View {
         Button(action: action) {
             HStack(spacing: 4) {
-                Image(systemName: "arrow.counterclockwise").font(.system(size: 10, weight: .semibold))
-                Text("Discard")
+                if iconOnly || !textOnly { Image(systemName: "arrow.counterclockwise").font(.system(size: 10, weight: .semibold)) }
+                if !iconOnly { Text("Discard") }
             }
-            .font(.system(size: compact ? 11 : 12, weight: .semibold))
+            .font(.system(size: compact ? 11 : textOnly ? 11.5 : 12, weight: .semibold))
             .foregroundStyle(theme.secondary)
-            .padding(.horizontal, compact ? 7 : 10).frame(height: compact ? 22 : PillLayout.button)
+            .padding(.horizontal, iconOnly ? 0 : compact ? 7 : textOnly ? 6 : 10)
+            .frame(width: iconOnly ? PillLayout.button : nil, height: compact ? 22 : PillLayout.button)
             .background(Capsule().fill(theme.buttonFill))
             .overlay(Capsule().strokeBorder(theme.buttonStroke, lineWidth: 0.5))
         }
@@ -523,6 +566,7 @@ struct CircleButton: View {
     var accent: Color? = nil
     var plain = false
     let help: String
+    var accessibility: String? = nil
     let action: () -> Void
     @StateObject private var hovering = Hover()
     private var hover: Bool { hovering.on }
@@ -542,6 +586,7 @@ struct CircleButton: View {
         .buttonStyle(PressStyle())
         .onHover { hovering.on = $0 }
         .help(help)
+        .accessibilityLabel(accessibility ?? help)
     }
 
     var glyph: Color {
@@ -562,28 +607,82 @@ struct CircleButton: View {
     }
 }
 
-/// Start voice (shown while it is off). Stopping is in the right-click menu and Settings, so a stray click on the
-/// pill never cuts voice off.
-struct StartButton: View {
+/// Full voice lifecycle, distinct from mic/output mute and the square Stop reply.
+struct VoiceToggleButton: View {
+    let status: ConversationController.Status
+    let width: CGFloat
     let action: () -> Void
     @Environment(\.pillTheme) private var theme
 
+    var title: String { status.running ? "Stop voice" : "Start voice" }
+    var help: String { status.running && status.phase == "starting" ? "Stop voice (cancel startup)" : title }
+
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: "power").font(.system(size: 10.5, weight: .bold))
-                Text("Start")
-            }
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(theme.onAccent)
-            .padding(.horizontal, 12).frame(height: PillLayout.button)
-            .background(Capsule().fill(LinearGradient(colors: [theme.you, theme.youDeep], startPoint: .top, endPoint: .bottom)))
-            .overlay(Capsule().strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5))
-            .shadow(color: theme.you.opacity(theme.glow * 0.6), radius: 6, y: 1)
+            Image(systemName: symbol).font(.system(size: 10.5, weight: .bold))
+            .foregroundStyle(status.running ? theme.glyph : theme.onAccent)
+            .frame(width: width, height: PillLayout.button)
+            .background(Capsule().fill(status.running ? theme.buttonFill : theme.you))
+            .overlay(Capsule().strokeBorder(theme.buttonStroke, lineWidth: 0.5))
             .contentShape(Capsule())
         }
         .buttonStyle(PressStyle())
-        .help("Start voice")
+        .help(help)
+        .accessibilityLabel(title)
+    }
+    var symbol: String { "power" }
+}
+
+/// Labelled expanded actions use the same glass/mute treatment as the compact circles.
+struct MuteButton: View {
+    let muted: Bool
+    let agent: Bool
+    let expanded: Bool
+    let width: CGFloat
+    let action: () -> Void
+    var title: String { "\(muted ? "Unmute" : "Mute") \(agent ? "agent" : "mic")" }
+    var help: String { agent ? title + " voice" : title }
+    var symbol: String { agent ? (muted ? "speaker.slash.fill" : "speaker.wave.2.fill") : (muted ? "mic.slash.fill" : "mic.fill") }
+    @Environment(\.pillTheme) private var theme
+    var body: some View {
+        if expanded {
+            Button(action: action) {
+                HStack(spacing: 4) {
+                    if agent { Image(systemName: symbol).font(.system(size: 12, weight: .semibold)) }
+                    Text(title).font(.system(size: 11.5, weight: .semibold))
+                }
+                .fixedSize()
+                .foregroundStyle(muted ? theme.activeGlyph : theme.glyph)
+                .frame(width: width, height: PillLayout.button)
+                .background(Capsule().fill(muted ? theme.activeFill : theme.buttonFill))
+                .overlay(Capsule().strokeBorder(muted ? .clear : theme.buttonStroke, lineWidth: 0.5))
+                .contentShape(Capsule())
+            }
+            .buttonStyle(PressStyle()).help(help).accessibilityLabel(help)
+        } else {
+            CircleButton(symbol: symbol, active: muted, help: help, action: action).frame(width: width)
+        }
+    }
+}
+
+struct ReplyStopButton: View {
+    let action: () -> Void
+    let title = "Stop reply"
+    @Environment(\.pillTheme) private var theme
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: "stop.fill").font(.system(size: 10.5, weight: .semibold))
+                Text(title).font(.system(size: 11.5, weight: .semibold))
+            }
+            .fixedSize().foregroundStyle(theme.chief)
+            .padding(.horizontal, 6).frame(height: PillLayout.button)
+            .background(Capsule().fill(theme.buttonFill))
+            .overlay(Capsule().strokeBorder(theme.buttonStroke, lineWidth: 0.5))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(PressStyle()).accessibilityLabel(title)
+        .help("Stop the agent’s speech and interrupt its reply; voice stays on")
     }
 }
 
@@ -591,18 +690,19 @@ struct StartButton: View {
 struct SendButton: View {
     let holding: Bool
     let hotkey: String
+    var textOnly = false
     let action: () -> Void
     @Environment(\.pillTheme) private var theme
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 4) {
-                Image(systemName: "arrow.up").font(.system(size: 10, weight: .bold))
+                if !textOnly { Image(systemName: "arrow.up").font(.system(size: 10, weight: .bold)) }
                 Text("Send")
             }
-            .font(.system(size: 12, weight: .semibold))
+            .font(.system(size: textOnly ? 11.5 : 12, weight: .semibold))
             .foregroundStyle(holding ? theme.onAccent : theme.secondary)
-            .padding(.horizontal, 12).frame(height: PillLayout.button)
+            .padding(.horizontal, textOnly ? 6 : 12).frame(height: PillLayout.button)
             .background(Capsule().fill(holding ? AnyShapeStyle(LinearGradient(colors: [theme.you, theme.youDeep], startPoint: .top, endPoint: .bottom))
                                                : AnyShapeStyle(theme.buttonFill)))
             .overlay(Capsule().strokeBorder(holding ? Color.white.opacity(0.22) : theme.buttonStroke, lineWidth: 0.5))

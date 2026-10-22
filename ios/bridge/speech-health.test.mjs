@@ -4,6 +4,7 @@ import http from 'node:http';
 import net from 'node:net';
 import { once } from 'node:events';
 import { createBridge } from './server.mjs';
+import { unpairedDesktop } from './fixtures/synthetic-desktop.mjs';
 
 async function listen(server) { server.listen(0, '127.0.0.1'); await once(server, 'listening'); return server.address().port; }
 for (const mode of ['refused', 'reset']) {
@@ -18,18 +19,17 @@ for (const mode of ['refused', 'reset']) {
     else t.after(() => upstream.close());
     let desktopPrepares = 0;
     const ocClient = { prepare: async () => { desktopPrepares++; throw new Error('Speech must not enter desktop auth context'); }, check: async () => {}, note() {} };
-    const bridge = createBridge({ credentials: { device: () => ({}) }, ttsPort: port, asrPort: port, ocClient });
+    const bridge = createBridge({ credentials: { device: () => ({}) }, discover: () => port, ttsPort: port, asrPort: port, ocClient });
     const bp = await listen(bridge); t.after(() => bridge.shutdown());
-    const fixtureAuthorization = `Bearer ${'fictional-speech-fixture-'.repeat(2).slice(0, 43)}`;
     for (const [route, service] of [['asr/health', 'asr'], ['tts/health', 'tts'], ['tts/v1/voices', 'tts'], ['tts/v1/audio/speech', 'tts']]) {
       const options = route.endsWith('speech') ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'default', voice: 'default', input: 'Hello', response_format: 'wav' }) } : {};
-      const r = await fetch(`http://127.0.0.1:${bp}/floating-voice/${route}`, { ...options, headers: { Authorization: fixtureAuthorization, ...options.headers } });
+      const r = await fetch(`http://127.0.0.1:${bp}/floating-voice/${route}`, { ...options, headers: { Authorization: 'Bearer synthetic-phone', ...options.headers } });
       assert.equal(r.status, 503);
       assert.deepEqual(await r.json(), { error: 'speech_unavailable', service, endpoint: `127.0.0.1:${port}` });
     }
     const result = await new Promise((resolve, reject) => {
       const r = http.get({ host: '127.0.0.1', port: bp, path: '/floating-voice/asr/v1/transcribe?partials=1', headers: {
-        Authorization: fixtureAuthorization, Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ=='
+        Authorization: 'Bearer synthetic-phone', Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ=='
       } }, res => { let body = ''; res.on('data', d => body += d); res.on('end', () => resolve({ code: res.statusCode, body })); });
       r.on('error', reject);
     });
@@ -42,7 +42,7 @@ test('health forwards direct and nested state without sending synthesis or webso
   const paths = [];
   const upstream = http.createServer((req, res) => { assert.equal(req.headers.authorization, undefined); paths.push(req.url); res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ model: 'loaded', upstream: { model: 'unloaded' } })); });
   const port = await listen(upstream); t.after(() => upstream.close());
-  const bridge = createBridge({ credentials: { device: () => ({}) }, ttsPort: port, asrPort: port });
+  const bridge = createBridge({ credentials: { device: () => ({}) }, ...unpairedDesktop(t, upstream), ttsPort: port, asrPort: port });
   const bp = await listen(bridge); t.after(() => bridge.shutdown());
   for (const service of ['tts', 'asr']) {
     const r = await fetch(`http://127.0.0.1:${bp}/floating-voice/${service}/health`);

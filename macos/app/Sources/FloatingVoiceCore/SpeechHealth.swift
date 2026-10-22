@@ -179,6 +179,7 @@ public final class HealthCheckedRecognition: RecognitionSession {
         self.coldBudget = coldBudget
     }
     public var isWarming: Bool { !cancelled && !completed && (inner == nil || (cold && !heardWords)) }
+    public var hasColdStartBudget: Bool { cold }
     public var hasBufferedAudio: Bool { !pending.isEmpty || drain != nil || inner?.hasBufferedAudio == true }
     public func prepareContinuation() { allowsColdStart = false }
     public func finalBudget(ordinary: TimeInterval) async -> TimeInterval {
@@ -256,6 +257,14 @@ public final class HealthCheckedRecognition: RecognitionSession {
         try await inner.writeBuffered(pcm)
     }
     public func end() { ended = true; startDrain() }
+    @MainActor public func waitForEndTransmission() async throws -> ContinuousClock.Instant {
+        await work?.value
+        try Task.checkCancellation()
+        await drain?.value
+        try Task.checkCancellation()
+        guard ended, !cancelled, !completed, let inner else { throw CancellationError() }
+        return try await inner.waitForEndTransmission()
+    }
     public func cancel() {
         cancelled = true; work?.cancel(); drain?.cancel()
         pending = []; pendingBytes = 0; inner?.cancel(); warmup.end(id)

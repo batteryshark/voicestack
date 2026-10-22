@@ -3,7 +3,7 @@ import Security
 import UIKit
 
 private final class SecItemAdapter: SecureItemAdapter {
-    // Keep credentials within the configured application namespace and account.
+    // Preserve the original private application-ID group, service and account.
     private let query: [String: Any]
     private var migrated = false
     init(account: String) {

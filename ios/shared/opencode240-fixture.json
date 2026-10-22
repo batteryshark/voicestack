@@ -1,29 +1,49 @@
 {
-  "sessionID": "ses_fresh240Session01",
+  "provenance": {
+    "openchamberVersion": "2.4.0",
+    "opencodeVersion": "2.0.32",
+    "history": "Synthetic adjacent pages preserving the protocol shape; identifiers, cursors, metadata and conversation content are fictional.",
+    "liveMutations": 0
+  },
+  "sessionID": "ses_SYNTHETIC0017",
   "latestPage": {
     "data": [
-      {"id": "msg_fresh240IdleNewest01", "type": "idle", "time": {"created": 4000}},
+      {"id":"msg_SYNTHETIC0007","time":{"created":1792170837138},"type":"idle","outcome":"succeeded"},
       {
-        "id": "msg_fresh240Answer01", "type": "assistant",
-        "time": {"created": 3000, "completed": 3500},
-        "model": {"providerID": "fictional", "modelID": "fixture-only"},
-        "tokens": {"input": 7, "output": 5}, "finish": "stop",
-        "content": [{"type": "text", "text": "Acknowledged in this throwaway session."}]
+        "id":"msg_SYNTHETIC0006",
+        "time":{"created":1792170835795,"streamed":1792170837103,"completed":1792170837136},
+        "type":"assistant",
+        "agent":"build",
+        "model":{"id":"gpt-6-luna","providerID":"openai","variant":"medium"},
+        "content":[{"type":"text","text":"Acknowledged in this throwaway session.","state":{"itemId":"msg_SYNTHETIC0001","phase":"final_answer"}}],
+        "snapshot":{"start":"0000000000000000000000000000000000000000","end":"0000000000000000000000000000000000000000","files":[]},
+        "finish":"stop",
+        "providerState":{"responseId":"resp_SYNTHETIC","serviceTier":"default"},
+        "cost":0,
+        "tokens":{"input":28227,"output":12,"reasoning":0,"cache":{"read":0,"write":0}}
       }
     ],
-    "cursor": {"previous": null, "next": "fresh240_page_older01"}
+    "cursor":{
+      "previous":"synthetic_previous_page",
+      "next":"synthetic_next_page"
+    }
   },
-  "olderPage": {
-    "data": [
-      {"id": "msg_fresh240User01", "type": "user", "time": {"created": 1000}, "text": "[Agent Canvas]\nFictional paper-kite selection."},
-      {"id": "msg_fresh240IdleOlder01", "type": "idle", "time": {"created": 2000}}
+  "olderPage":{
+    "data":[
+      {"id":"msg_SYNTHETIC0012","time":{"created":1792170835786},"text":"[Agent Canvas]\nFictional paper-kite selection.","type":"user"},
+      {"id":"msg_SYNTHETIC0005","time":{"created":1792160206361},"type":"idle","outcome":"succeeded"}
     ],
-    "cursor": {"previous": "fresh240_page_latest01", "next": null}
+    "cursor":{
+      "previous":"synthetic_latest_page",
+      "next":"synthetic_older_page"
+    }
   },
-  "toolInputEndedShape": {
-    "id": "evt_fresh240Tool01", "created": 1,
-    "type": "session.tool.input.ended", "location": {"directory": "/synthetic"},
-    "data": {"sessionID": "ses_fresh240Session01", "assistantMessageID": "msg_fresh240Tool01", "id": "tool_fresh240One", "text": "Fictional tool input; not narration."},
-    "durable": {"aggregateID": "ses_fresh240Session01", "seq": 1, "version": 1}
+  "toolInputEndedShape":{
+    "id":"string",
+    "created":"number",
+    "type":"session.tool.input.ended",
+    "location":{"directory":"string"},
+    "data":{"sessionID":"string","assistantMessageID":"string","id":"string","text":"string"},
+    "durable":{"aggregateID":"string","seq":"number","version":1}
   }
 }

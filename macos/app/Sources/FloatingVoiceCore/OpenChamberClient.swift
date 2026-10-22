@@ -65,12 +65,12 @@ public struct SessionSummary: Equatable, Sendable {
         self.id = id; self.title = title; self.updated = updated; self.directory = directory; self.parentID = parentID
     }
 
-    /// "a10001" for ses_a10001fixture0000000000…: short enough to tell sessions with the same title apart.
+    /// "SYNTHE" for ses_SYNTHETIC0022…: short enough to tell sessions with the same title apart.
     public static func shortID(_ id: String) -> String {
         String((id.hasPrefix("ses_") ? id.dropFirst(4) : Substring(id)).prefix(6))
     }
     public var shortID: String { SessionSummary.shortID(id) }
-    /// "Chief of staff · a10001"
+    /// "Chief of staff · SYNTHE"
     public var label: String { "\(title.isEmpty ? "Untitled" : title) · \(shortID)" }
 }
 

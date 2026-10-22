@@ -36,6 +36,9 @@ public struct CallReceipt: Codable, Equatable, Sendable {
     public var reportedRinging: Bool?
     public var reportFailure: IncomingReportFailure?
     public var reportErrorCode: Int?
+    /// Phone-declared quiet decline only; never a server admission policy.
+    public var quietUntil: Double?
+    public var quietEnd: String?
     public init(_ event: Event, reason: CallTerminationReason? = nil, initiator: CallEndInitiator? = nil,
                 reportedRinging: Bool? = nil, reportFailure: IncomingReportFailure? = nil, reportErrorCode: Int? = nil) {
         self.event = event; endReason = reason; endInitiator = initiator

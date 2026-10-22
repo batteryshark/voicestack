@@ -106,6 +106,17 @@ public final class MacAudio: AudioInput, AutomaticCutInOutput, LevelReporting {
     private var configurationObserver: NSObjectProtocol?
     private var receivedInput = false
     private var startup: Task<Void, Error>?
+    // Native acquisition ownership, independent of Stop reply / playback generation.
+    private var lifecycle = 0
+    // Device-free startup gates for focused lifecycle tests; production always uses the native path.
+    struct StartupTestHooks {
+        var permission: () async throws -> Void
+        var beforeEngine: () async throws -> Void = {}
+        var open: (Bool) throws -> Void
+        var ready: () async throws -> Void = {}
+        var closed: () -> Void = {}
+    }
+    var startupTestHooks: StartupTestHooks?
     private var waiters: [Int: CheckedContinuation<Void, Never>] = [:]
     private var nextWaiter = 0
     private var automaticCutInPaused = false
@@ -183,10 +194,14 @@ public final class MacAudio: AudioInput, AutomaticCutInOutput, LevelReporting {
     // MARK: AudioInput
 
     public func start() async throws {
+        try Task.checkCancellation()
         if running && capturing { return }
         close()
-        try await Self.requireMicrophonePermission()
-        try await begin(capture: true)
+        let owner = lifecycle
+        if let hooks = startupTestHooks { try await hooks.permission() }
+        else { try await Self.requireMicrophonePermission() }
+        try checkStartup(owner)
+        try await begin(capture: true, owner: owner)
     }
 
     /// Without permission macOS delivers silent frames instead of failing, so check it explicitly.
@@ -205,16 +220,36 @@ public final class MacAudio: AudioInput, AutomaticCutInOutput, LevelReporting {
 
     // MARK: Engine
 
-    private func begin(capture: Bool) async throws {
-        let task = Task<Void, Error> { @MainActor in
-            try self.startEngine(capture: capture)
-            try await self.waitReady(capture: capture)
-        }
-        startup = task
-        do { try await task.value } catch { close(); throw error }
+    private func checkStartup(_ owner: Int) throws {
+        try Task.checkCancellation()
+        guard owner == lifecycle else { throw CancellationError() }
     }
 
-    private func startEngine(capture: Bool) throws {
+    private func begin(capture: Bool, owner: Int) async throws {
+        try checkStartup(owner)
+        let task = Task<Void, Error> { @MainActor in
+            try await self.startupTestHooks?.beforeEngine()
+            try self.checkStartup(owner)
+            try self.startEngine(capture: capture, owner: owner)
+            try await self.waitReady(capture: capture, owner: owner)
+            try self.checkStartup(owner)
+        }
+        startup = task
+        do { try await task.value; try checkStartup(owner) }
+        catch {
+            // A cancelled old start must never close the replacement graph.
+            if owner == lifecycle { close() }
+            throw error
+        }
+    }
+
+    private func startEngine(capture: Bool, owner: Int) throws {
+        try checkStartup(owner)
+        if let hooks = startupTestHooks {
+            try hooks.open(capture)
+            running = true; capturing = capture
+            return
+        }
         let repair = beginPlaybackGraphRepair()
         let cfg = config()
         engine = AVAudioEngine()
@@ -271,7 +306,9 @@ public final class MacAudio: AudioInput, AutomaticCutInOutput, LevelReporting {
                 }
                 guard error == nil, let samples = converted.int16ChannelData, converted.frameLength > 0 else { return }
                 let data = Data(bytes: samples[0], count: Int(converted.frameLength) * 2)
-                DispatchQueue.main.async { MainActor.assumeIsolated { if fence.current == epoch { self?.deliver(data) } } }
+                DispatchQueue.main.async { MainActor.assumeIsolated {
+                    if fence.current == epoch, self?.lifecycle == owner { self?.deliver(data) }
+                } }
             }
             tapInstalled = true
         } else {
@@ -287,7 +324,7 @@ public final class MacAudio: AudioInput, AutomaticCutInOutput, LevelReporting {
             let n = Int(buffer.frameLength)
             for i in 0..<n { let x = samples[0][i]; sum += x * x }
             let rms = Double((sum / Float(n)).squareRoot())
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.onLevel?(rms) } }
+            DispatchQueue.main.async { MainActor.assumeIsolated { if self?.lifecycle == owner { self?.onLevel?(rms) } } }
         }
         playerTapInstalled = true
         // Reapply after graph construction so automatic mixer negotiation cannot reset it.
@@ -295,12 +332,12 @@ public final class MacAudio: AudioInput, AutomaticCutInOutput, LevelReporting {
         live.set(true)
         running = true
         capturing = capture
-        observeStartup(processed: processed, speakers: speakers, microphone: microphone, common: common)
+        observeStartup(processed: processed, speakers: speakers, microphone: microphone, common: common, owner: owner)
         try engine.start()
         playbackGraphReplacementInstalled(repair)
-        if capture && !processed, let microphone { try startPlainCapture(microphone.id) }
+        if capture && !processed, let microphone { try startPlainCapture(microphone.id, owner: owner) }
         log("audio: engine started capture=\(capture) echoCancellation=\(processed) (\(echoChoice.reason)) input=\(capture ? microphone?.uid ?? "?" : "off") output=\(speakers.uid)")
-        startRouteWatch(capture: capture, processed: processed, speakers: speakers, microphone: microphone, inputUID: inputUID, outputUID: outputUID)
+        startRouteWatch(capture: capture, processed: processed, speakers: speakers, microphone: microphone, inputUID: inputUID, outputUID: outputUID, owner: owner)
     }
 
     private var lastConfigurationChange = Date()
@@ -308,21 +345,21 @@ public final class MacAudio: AudioInput, AutomaticCutInOutput, LevelReporting {
 
     /// Bluetooth can stop the engine while entering its microphone profile. Recover only during startup on the
     /// same confirmed devices, before any speech is accepted.
-    private func observeStartup(processed: Bool, speakers: AudioDeviceChoice, microphone: AudioDeviceChoice?, common: AVAudioFormat) {
+    private func observeStartup(processed: Bool, speakers: AudioDeviceChoice, microphone: AudioDeviceChoice?, common: AVAudioFormat, owner: Int) {
         let deadline = Date().addingTimeInterval(5)
         var restarts = 0
         readySent = false
         lastConfigurationChange = Date()
         configurationObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, self.running else { return }
+                guard let self, self.lifecycle == owner, self.running else { return }
                 self.lastConfigurationChange = Date()
                 self.onDiagnosticConfiguration?()
                 guard !self.engine.isRunning, !self.readySent, restarts < 3, Date() < deadline else { return }
                 restarts += 1
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
                     MainActor.assumeIsolated {
-                        guard let self, self.running, !self.engine.isRunning, !self.readySent else { return }
+                        guard let self, self.lifecycle == owner, self.running, !self.engine.isRunning, !self.readySent else { return }
                         let output = self.engine.outputNode
                         guard audioDeviceMatches(output, speakers.id, 0), !processed || audioDeviceMatches(self.engine.inputNode, microphone!.id, 1) else {
                             self.failNow("Selected audio devices changed during startup."); return
@@ -344,9 +381,12 @@ public final class MacAudio: AudioInput, AutomaticCutInOutput, LevelReporting {
 
     private var deviceNames = ("", "")
 
-    private func waitReady(capture: Bool) async throws {
+    private func waitReady(capture: Bool, owner: Int) async throws {
+        try checkStartup(owner)
+        if let hooks = startupTestHooks { try await hooks.ready(); try checkStartup(owner); return }
         let deadline = Date().addingTimeInterval(5)
         while running {
+            try checkStartup(owner)
             if engine.isRunning && (!capture || receivedInput) && Date().timeIntervalSince(lastConfigurationChange) > 0.3 {
                 readySent = true
                 log("audio: ready")
@@ -366,10 +406,10 @@ public final class MacAudio: AudioInput, AutomaticCutInOutput, LevelReporting {
         throw CancellationError()
     }
 
-    private func startRouteWatch(capture: Bool, processed: Bool, speakers: AudioDeviceChoice, microphone: AudioDeviceChoice?, inputUID: String, outputUID: String) {
+    private func startRouteWatch(capture: Bool, processed: Bool, speakers: AudioDeviceChoice, microphone: AudioDeviceChoice?, inputUID: String, outputUID: String, owner: Int) {
         routeTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, self.running else { return }
+                guard let self, self.lifecycle == owner, self.running else { return }
                 let available = Set(audioDevices().map(\.id))
                 let outputOK = available.contains(speakers.id) && (outputUID == "default" || audioDeviceMatches(self.engine.outputNode, speakers.id, 0))
                 let inputOK = !capture || (available.contains(microphone!.id) && (processed ? inputUID == "default" || audioDeviceMatches(self.engine.inputNode, microphone!.id, 1) : self.hal.matches(microphone!.id)))
@@ -387,7 +427,7 @@ public final class MacAudio: AudioInput, AutomaticCutInOutput, LevelReporting {
     }
 
     /// Same 16 kHz mono s16le stream as the voice-processing tap. Conversion runs off the real-time thread.
-    private func startPlainCapture(_ device: AudioDeviceID) throws {
+    private func startPlainCapture(_ device: AudioDeviceID, owner: Int) throws {
         let queue = captureQueue, live = self.live
         let fence = captureEpoch
         let mono = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16000, channels: 1, interleaved: true)!
@@ -413,7 +453,9 @@ public final class MacAudio: AudioInput, AutomaticCutInOutput, LevelReporting {
                 }
                 guard error == nil, let out = converted.int16ChannelData, converted.frameLength > 0 else { return }
                 let data = Data(bytes: out[0], count: Int(converted.frameLength) * 2)
-                DispatchQueue.main.async { MainActor.assumeIsolated { if fence.current == epoch { self?.deliver(data) } } }
+                DispatchQueue.main.async { MainActor.assumeIsolated {
+                    if fence.current == epoch, self?.lifecycle == owner { self?.deliver(data) }
+                } }
             }
         }
         queue.sync {
@@ -434,10 +476,15 @@ public final class MacAudio: AudioInput, AutomaticCutInOutput, LevelReporting {
     // MARK: AudioOutput
 
     public func play(_ audio: SpeechAudio, label: String, onStart: @escaping () -> Void) async throws {
-        if !running { try await begin(capture: false) } else if let startup { try await startup.value }
+        try Task.checkCancellation()
+        if !running { close() }
+        let owner = lifecycle, gen = generation
+        if !running { try await begin(capture: false, owner: owner) }
+        else if let startup { try await startup.value }
+        try checkStartup(owner)
+        guard gen == generation else { return }
         // The engine stops during a route change (Bluetooth); the route watch then pauses voice.
-        guard engine.isRunning else { throw audioError(13, "Audio output is not running (the audio route changed). Reconnect the headphones or set outputDevice in agent-voice.json, then press Start voice.") }
-        let gen = generation
+        guard engine.isRunning else { throw audioError(13, "Audio output is not running (the audio route changed). Check the output device, then use Stop voice and Start voice to retry.") }
         await awaitProducer()
         guard gen == generation else { return }
         guard let source = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: Double(audio.sampleRate), channels: 1, interleaved: true),
@@ -523,7 +570,7 @@ public final class MacAudio: AudioInput, AutomaticCutInOutput, LevelReporting {
             }
         }
         timeoutTask?.cancel()
-        if timedOut.get && gen == generation { throw audioError(10, "Selected output device stopped playing") }
+        if timedOut.get && gen == generation { throw audioError(10, "Selected output device stopped playing. Check the output device, then use Stop voice and Start voice to retry.") }
     }
 
     public func stopPlayback() {
@@ -540,6 +587,8 @@ public final class MacAudio: AudioInput, AutomaticCutInOutput, LevelReporting {
     }
 
     private func close() {
+        lifecycle += 1
+        captureEpoch.advance()
         _ = graphRepair.begin() // Fence synchronous rollback before stop/close callbacks.
         startup?.cancel(); startup = nil
         if let configurationObserver { NotificationCenter.default.removeObserver(configurationObserver); self.configurationObserver = nil }
@@ -557,6 +606,7 @@ public final class MacAudio: AudioInput, AutomaticCutInOutput, LevelReporting {
         if engine.attachedNodes.contains(player) { engine.detach(player) }
         engine.reset()
         graphRepair.resetAfterClose()
+        startupTestHooks?.closed()
         // The next start builds a fresh engine and player.
         if wasRunning { log("audio: closed (microphone released)") }
     }

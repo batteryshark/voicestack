@@ -12,6 +12,7 @@ import { promisify } from 'node:util';
 import { PushStore } from './push-store.mjs';
 import { CONFIG } from './reachout-policy.mjs';
 import { Credentials, createBridge } from './server.mjs';
+import { unpairedDesktop } from './fixtures/synthetic-desktop.mjs';
 const moduleURL = name => process.env.M4_REVIEW_MODULE_DIR ? pathToFileURL(path.join(process.env.M4_REVIEW_MODULE_DIR, name)).href : new URL(name, import.meta.url).href;
 const { PushService } = await import(moduleURL('./push-service.mjs'));
 const { startSender } = await import(moduleURL('./push-socket.mjs'));
@@ -60,30 +61,22 @@ test('provider JWT is reused for call/fallback and concurrent sends, refreshing 
   assert.notEqual(headers[0].authorization, headers.at(-1).authorization);
   assert.equal(headers.at(-1).authorization, headers.at(-2).authorization);
 });
-test('two-device fallback at 45 seconds and state work bypass held ordinary APNs backlog', async t => {
-  const f = fixture(t); await f.service.send(intent('call')); await f.service.drain?.();
-  let hold = true; const fallbackAt = [];
-  f.service.apns = request => {
-    f.sent.push(request);
-    if (request.payload.aps.category === 'URGENT_FALLBACK') { fallbackAt.push(f.now()); return Promise.resolve({ status: 200 }); }
-    return hold ? new Promise(resolve => f.release.push(resolve)) : Promise.resolve({ status: 200 });
-  };
-  const sender = await startSender(f.service); const requests = [];
-  try {
-    for (let i = 0; i < 5; i++) requests.push(socketRequest(sender.socketPath, { command: 'send', request: intent('alert-' + i, 'need', 'hands') }, { projectRoot: f.root }));
-    await turns(); f.advance(45000);
-    let synced = false, recovered = false;
-    const recovery = f.service.serial(() => f.service.recover()).then(() => { recovered = true; });
-    const sync = f.service.serial(() => f.service.update(f.devices[0], 'settings', { ...settings, revision: 2 })).then(() => { synced = true; });
-    const receipt = f.service.serial(() => f.service.event(f.devices[0], f.receipt('call', 'reported')));
-    await turns();
-    assert.equal(recovered, true, 'deadline recovery must not wait for ordinary HTTP/2 completion');
-    assert.equal(synced, true); assert.deepEqual(fallbackAt, [f.now(), f.now()]);
-    assert.equal(f.sent.filter(r => !r.voip && r.payload.aps.category !== 'URGENT_FALLBACK').length, 2, 'ordinary concurrency is bounded');
-    hold = false; for (const done of f.release) done({ status: 200 });
-    await Promise.all([...requests, recovery, sync, receipt]); await f.service.drain?.();
-    assert.equal(f.sent.filter(r => r.voip).length, 2);
-  } finally { hold = false; for (const done of f.release) done({ status: 200 }); await Promise.allSettled(requests); await f.service.drain?.(); await sender.close(); }
+test('deadline recovery, settings and receipts bypass a held two-device VoIP backlog; nothing else is sent', async t => {
+  const f = fixture(t, { ...CONFIG, dispatchConcurrency: 1 });
+  f.service.apns = request => { f.sent.push(request); return new Promise(resolve => f.release.push(resolve)); };
+  await f.service.send(intent('call')); await turns();
+  assert.equal(f.sent.length, 1, 'second device queued behind the held lane');
+  f.advance(45000);
+  let synced = false, recovered = false;
+  const recovery = f.service.serial(() => f.service.recover()).then(() => { recovered = true; });
+  const sync = f.service.serial(() => f.service.update(f.devices[0], 'settings', { ...settings, revision: 2 })).then(() => { synced = true; });
+  const receipt = f.service.serial(() => f.service.event(f.devices[0], f.receipt('call', 'reported')));
+  await turns();
+  assert.equal(recovered, true, 'deadline recovery must not wait for HTTP/2 completion'); assert.equal(synced, true);
+  for (const done of f.release.splice(0)) done({ status: 200 }); await turns();
+  for (const done of f.release.splice(0)) done({ status: 200 });
+  await Promise.all([recovery, sync, receipt]); await f.service.drain?.();
+  assert.ok(f.sent.every(r => r.voip)); assert.equal(f.target('call', 'A').fallback, undefined);
 });
 for (const component of ['private', 'private/push', 'private/push/sender.sock']) test('CLI rejects symlink at ' + component + ' beneath trusted project anchor', async t => {
   const f = fixture(t); const sender = await startSender(f.service);
@@ -93,7 +86,7 @@ for (const component of ['private', 'private/push', 'private/push/sender.sock'])
     await assert.rejects(async () => socketRequest(sender.socketPath, { command: 'status', id: 'unknown' }, { projectRoot: f.root }), /private/);
   } finally { fs.unlinkSync(source); fs.renameSync(moved, source); await sender.close(); }
 });
-test('phone receipts require its own actual VoIP dispatch and cannot replay or alter a resolved fallback', async t => {
+test('phone receipts require its own actual VoIP dispatch and cannot replay or alter a resolved outcome', async t => {
   const f = fixture(t, { ...CONFIG, dispatchConcurrency: 1 });
   let hold = true;
   f.service.apns = request => { f.sent.push(request); return hold && request.voip ? new Promise(resolve => f.release.push(resolve)) : Promise.resolve({ status: 200 }); };
@@ -110,16 +103,14 @@ test('phone receipts require its own actual VoIP dispatch and cannot replay or a
   const before = JSON.stringify(f.target('call'));
   for (const event of ['declined', 'report-failed']) await f.service.event(f.devices[0], { ...decline, event });
   assert.equal(JSON.stringify(f.target('call')), before, 'resolved receipt replays cannot mutate state');
-  const fallback = f.sent.filter(r => r.payload.aps.category === 'URGENT_FALLBACK');
-  assert.equal(fallback.length, 1); assert.equal(fallback[0].token, '1'.repeat(64));
-  assert.equal(fallback[0].payload.aps.alert.body, 'Agent needs a decision');
+  assert.equal(f.sent.filter(r => !r.voip).length, 0, 'a declined call only reports its outcome');
   assert.equal(f.sent.filter(r => r.voip).length, 1);
   hold = false; for (const done of f.release) done({ status: 200 }); await f.service.drain?.();
   await f.service.event(f.devices[1], f.receipt('call', 'answered'));
   await f.service.event(f.devices[1], f.receipt('call', 'report-failed'));
-  assert.equal(f.sent.filter(r => r.payload.aps.category === 'URGENT_FALLBACK').length, 1);
+  assert.equal(f.sent.filter(r => !r.voip).length, 0);
 });
-test('tokens stay private; HTTP permits only an immutable single fallback for an unresolved device-bound call', async t => {
+test('tokens stay private; HTTP receipts resolve a device-bound call once and dispatch nothing', async t => {
   const f = fixture(t), diagnostics = [], outputs = [], errors = [];
   const tokens = ['1', '2', '3', '4'].map(s => s.repeat(64));
   f.service.apns = async request => { f.sent.push(request); throw Error('synthetic transport ' + request.token); };
@@ -128,7 +119,7 @@ test('tokens stay private; HTTP permits only an immutable single fallback for an
   const file = path.join(f.root, 'private/fixture-auth.json');
   fs.writeFileSync(file, JSON.stringify({ devices: Object.fromEntries([[bearer, 'A'], [other, 'B'], [unpaired, 'foreign']].map(([key, deviceID]) =>
     [crypto.createHash('sha256').update(key).digest('hex'), { deviceID }])) }), { mode: 0o600 });
-  const bridge = createBridge({ credentials: new Credentials(file), push: f.service, diagnostic: entry => diagnostics.push(entry) });
+  const bridge = createBridge({ credentials: new Credentials(file), ...unpairedDesktop(t), push: f.service, diagnostic: entry => diagnostics.push(entry) });
   await new Promise(resolve => bridge.listen(0, '127.0.0.1', resolve)); t.after(() => bridge.shutdown());
   const sender = await startSender(f.service); t.after(() => sender.close());
   async function call(route, method = 'GET', data, auth = bearer) {
@@ -158,13 +149,12 @@ test('tokens stay private; HTTP permits only an immutable single fallback for an
   assert.equal(await call('events', 'POST', receipt), 200);
   assert.equal(await call('events', 'POST', { ...receipt, event: 'declined' }), 200);
   assert.equal(JSON.stringify(f.target('call')), resolved);
-  assert.equal(f.sent.length, baseline + 1); assert.equal(f.sent.at(-1).voip, false);
-  assert.equal(f.sent.at(-1).token, tokens[0]); assert.equal(f.sent.at(-1).payload.aps.alert.body, 'Agent needs a decision');
+  assert.equal(f.sent.length, baseline, 'no follow-up notification after a failed call');
   outputs.push(JSON.stringify(f.service.status('call')));
   outputs.push(JSON.stringify(await socketRequest(sender.socketPath, { command: 'status', id: 'call' }, { projectRoot: f.root })));
   // Exercise the real CLI stdout/stderr against this synthetic project's socket.
   const cliDir = path.join(f.root, 'bridge'); fs.mkdirSync(cliDir, { mode: 0o700 });
-  for (const name of ['reachout.mjs', 'reachout-policy.mjs', 'push-store.mjs', 'dev-override.mjs']) fs.copyFileSync(new URL(name, import.meta.url), path.join(cliDir, name));
+  for (const name of ['reachout.mjs', 'reachout-policy.mjs', 'push-store.mjs']) fs.copyFileSync(new URL(name, import.meta.url), path.join(cliDir, name));
   const cli = await promisify(execFile)(process.execPath, [fs.realpathSync(path.join(cliDir, 'reachout.mjs')), 'status', '--id', 'call']);
   outputs.push(cli.stdout, cli.stderr); assert.equal(JSON.parse(cli.stdout).id, 'call');
   try { f.service.update(f.devices[0], 'enrollment', { ...snapshot, extra: tokens[0] }); } catch (e) { errors.push(e.message); }
@@ -191,26 +181,21 @@ test('failed atomic replacement retains prior state and removes temporary token-
   assert.equal(fs.readFileSync(f.service.store.file, 'utf8'), previous);
   assert.deepEqual(fs.readdirSync(f.service.store.directory), ['state.json']);
 });
-test('late answer suppresses queued fallback; crash-uncertain queued alerts are never dispatched on recovery', async t => {
+test('legacy queued alerts and fallbacks from older records settle as uncertain and are never dispatched', async t => {
   const f = fixture(t, { ...CONFIG, dispatchConcurrency: 1 });
   await f.service.send(intent('call')); await f.service.drain();
-  let hold = true;
-  f.service.apns = request => { f.sent.push(request); return hold ? new Promise(resolve => f.release.push(resolve)) : Promise.resolve({ status: 200 }); };
-  f.advance(45000); await f.service.recover();
-  assert.equal(f.sent.filter(r => r.payload.aps.category === 'URGENT_FALLBACK').length, 1);
-  await f.service.event(f.devices[1], f.receipt('call', 'answered'));
-  hold = false; for (const done of f.release) done({ status: 200 }); await f.service.drain();
-  assert.equal(f.target('call', 'B').fallback.state, 'suppressed-answer');
-  assert.equal(f.sent.filter(r => r.payload.aps.category === 'URGENT_FALLBACK').length, 1);
-  hold = true;
-  await f.service.send(intent('ordinary-1', 'need', 'hands')); await f.service.send(intent('ordinary-2', 'need', 'hands'));
+  // Records written before Nod took over messages: a queued need alert and a queued call fallback.
+  const now = f.now();
+  f.service.store.data.records['r:old-need'] = { request: { ...intent('old-need'), kind: 'need', reason: 'hands' }, createdAt: now, expiry: now + 3600000,
+    targets: { 'd:B': { deviceID: 'B', reason: 'ordinary', state: 'notification-intent', alert: { state: 'dispatch-queued', reservedAt: now } } } };
+  f.target('call', 'B').fallback = { state: 'dispatch-queued', reservedAt: now }; f.service.store.save();
   let restartedAttempts = 0;
   const before = f.sent.length, restarted = new PushService({ store: new PushStore(f.service.store.directory), apns: async () => { restartedAttempts++; throw Error('must not send'); },
     chief: () => 'ses_fixture', activeDevices: () => f.devices, now: f.now });
-  await restarted.recover(); await restarted.recover();
-  assert.equal(restarted.device('B').enrollment.alertToken, '2'.repeat(64));
-  assert.equal(restarted.store.data.records['r:ordinary-2'].targets['d:B'].alert.state, 'delivery-unknown');
-  assert.equal(f.sent.length, before);
-  assert.equal(restartedAttempts, 0);
-  hold = false; for (const done of f.release) done({ status: 200 }); await f.service.drain();
+  f.advance(45000); await restarted.recover(); await restarted.recover();
+  const old = restarted.store.data.records['r:old-need'].targets['d:B'];
+  assert.equal(old.alert.state, 'delivery-unknown'); assert.equal(old.state, 'delivery-unknown');
+  assert.equal(restarted.store.data.records['r:call'].targets['d:B'].fallback.state, 'delivery-unknown');
+  assert.equal(restarted.status('old-need').targets[0].delivery, 'delivery-unknown');
+  assert.equal(f.sent.length, before); assert.equal(restartedAttempts, 0);
 });

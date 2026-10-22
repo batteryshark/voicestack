@@ -60,28 +60,33 @@ import WebKit
         #expect(BlockMarkdown.parse("| A | B |\n| --- | --- |\n| streamed") == [.table([["A", "B"], ["streamed"]])])
     }
     @Test func linkAndInstallPolicyNeverInvokesSystem() throws {
-        let manifest = "https://build.ts.net/app.plist"
+        let manifest = LinkPolicy.installManifest
         let policy = LinkPolicy(privilegedHosts: ["canvas.example"], approvedManifests: [manifest])
-        for raw in ["http://example.com", "https://127.0.0.1", "https://localhost", "https://192.0.2.10", "https://host-07.example.ts.net", "https://canvas.example", "https://user:pass@example.com", "file:///etc/hosts", "https://example.com/api/fs/raw"] {
+        for raw in ["http://example.com", "https://127.0.0.1", "https://localhost", "https://100.1.2.3", "https://chief.ts.net", "https://canvas.example", "https://user:pass@example.com", "file:///etc/hosts", "https://example.com/api/fs/raw"] {
             #expect(!policy.web(URL(string: raw)!))
         }
         #expect(policy.web(URL(string: "https://example.com/guide")!))
-        #expect(policy.install(URL(string: "itms-services://?action=download-manifest&url=https%3A%2F%2Fbuild.ts.net%2Fapp.plist")!) != nil)
+        #expect(policy.install(URL(string: "itms-services://?action=download-manifest&url=https%3A%2F%2Fexample-host.example-tailnet.invalid%2Ffloating-voice-ios%2Fmanifest.plist")!) != nil)
         for raw in ["itms-services://?action=other&url=\(manifest)", "itms-services://?action=download-manifest&url=https://evil.example/x", "itms-services://?action=download-manifest&action=download-manifest&url=\(manifest)"] { #expect(policy.install(URL(string: raw)!) == nil) }
     }
     @Test func reviewRegressionInstallDomainIsMandatoryAndConfigurationOnlyNarrows() throws {
         func link(_ manifest: String) -> URL {
-            var value = URLComponents(string: "itms-services://")!
-            value.queryItems = [.init(name: "action", value: "download-manifest"), .init(name: "url", value: manifest)]
-            return value.url!
+            let encoded = manifest.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~"))!
+            return URL(string: "itms-services://?action=download-manifest&url=" + encoded)!
         }
+        let allowed = LinkPolicy.installManifest, outside = "https://install.example/app.plist"
+        #expect(LinkPolicy().install(link(allowed)) == nil)
+        #expect(LinkPolicy(approvedManifests: [outside]).install(link(outside)) == nil)
+        #expect(LinkPolicy(approvedManifests: [allowed]).install(link(allowed)) != nil)
+        #expect(LinkPolicy(approvedManifests: [allowed]).install(link("https://other.example-tailnet.invalid/app.plist")) == nil)
+        for raw in ["https://BUILD.example-tailnet.TS.NET.:9443/path/build.plist?version=2", "https://nested.build.example-tailnet.invalid:8443/any/path"] {
+            #expect(LinkPolicy(approvedManifests: [raw]).install(link(raw)) == nil)
+        }
+        for raw in [outside, "http://build.example-tailnet.invalid/a", "https://example-tailnet.invalid/a", "https://build.example-tailnet.invalid.evil.example/a", "https://fake-example-tailnet.invalid/a", "https://build.example-tailnet.invalid@evil.example/a", "https://user:pass@build.example-tailnet.invalid/a", "https://build.example-tailnet.invalid/a#fragment"] {
+            #expect(LinkPolicy(approvedManifests: [raw]).install(link(raw)) == nil)
+        }
+        for raw in ["itms-services://evil?url=\(allowed)&action=download-manifest", "itms-services:///path?url=\(allowed)&action=download-manifest", "itms-services://?action=download-manifest&url=\(allowed)&extra=1", "itms-services://?action=download-manifest&url=\(allowed)&url=\(allowed)"] { #expect(LinkPolicy().install(URL(string: raw)!) == nil) }
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let rows = try JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("shared/install-policy-fixtures.json"))) as! [[String: Any]]
-        for row in rows {
-            let policy = LinkPolicy(approvedManifests: Set(row["approvedManifests"] as! [String]), deploymentSuffix: row["deploymentSuffix"] as! String)
-            let allowed = (row["url"] as? String).flatMap(URL.init(string:)).flatMap { policy.install($0) } != nil
-            #expect(allowed == (row["expected"] as! Bool), "\(row["name"]!)")
-        }
         let view = try String(contentsOf: root.appendingPathComponent("native/PrivateLinkView.swift"))
         let dialog = try #require(view.components(separatedBy: ".confirmationDialog(").last)
         #expect(dialog.contains("Host:") && dialog.contains("Manifest:") && dialog.contains("manifest.path"))

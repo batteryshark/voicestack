@@ -246,9 +246,7 @@ import Testing
         let onAck = sync.acknowledge(sync.desired, at: Date()); #expect(onAck)
         #expect(sync.allowsCall(at: Date()))
     }
-    @Test func notificationCategoriesAndBoundLookup() throws {
-        #expect(ReachOutContext.categoryAllowed("NEED")); #expect(ReachOutContext.categoryAllowed("READY_TO_TRY")); #expect(ReachOutContext.categoryAllowed("URGENT_FALLBACK"))
-        #expect(!ReachOutContext.categoryAllowed("MILESTONE"))
+    @Test func boundReachOutLookup() throws {
         let record: [String: Any] = ["reachoutID": "need-1", "session": "ses_target", "messageID": "msg_here", "expiry": Date().addingTimeInterval(60).timeIntervalSince1970 * 1000]
         let context = try ReachOutContext(record: record, reachoutID: "need-1")
         #expect(context.session == "ses_target" && context.messageID == "msg_here")
@@ -257,10 +255,12 @@ import Testing
         #expect(throws: (any Error).self) { try ReachOutContext(record: record, reachoutID: "need-1", invitation: invitation()) }
     }
     @Test func installNeverAcceptsRawPushOrLookalikeURL() throws {
-        let policy = LinkPolicy(approvedManifests: ["https://mac.ts.net/build/manifest.plist"])
-        let url = try #require(URL(string: "itms-services://?action=download-manifest&url=https%3A%2F%2Fmac.ts.net%2Fbuild%2Fmanifest.plist"))
-        #expect(policy.install(url)?.path == "/build/manifest.plist")
-        for value in ["https://mac.ts.net/build/manifest.plist", "itms-services://?action=download-manifest&url=https%3A%2F%2Fmac.ts.net.evil.com%2Fx", "itms-services://?action=download-manifest&url=http%3A%2F%2Fmac.ts.net%2Fx"] {
+        let policy = LinkPolicy(approvedManifests: [LinkPolicy.installManifest])
+        let encoded = LinkPolicy.installManifest.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~"))!
+        let url = try #require(URL(string: "itms-services://?action=download-manifest&url=" + encoded))
+        #expect(policy.install(url)?.absoluteString == LinkPolicy.installManifest)
+        #expect(LinkPolicy().install(url) == nil)
+        for value in [LinkPolicy.installManifest, "itms-services://?action=download-manifest&url=https%3A%2F%2Fmac.example-tailnet.invalid%2Fbuild%2Fmanifest.plist", "itms-services://?action=download-manifest&url=https%3A%2F%2Fmac.example-tailnet.invalid.evil.com%2Fx", "itms-services://?action=download-manifest&url=http%3A%2F%2Fmac.example-tailnet.invalid%2Fx"] {
             #expect(policy.install(URL(string: value)!) == nil)
         }
     }

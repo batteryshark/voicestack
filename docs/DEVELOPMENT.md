@@ -54,8 +54,13 @@ Reasoning and tool-result events aren't a speech source. The phone reconciles
 live narration with its conversation store; ordinary history loads silently.
 There is no tool-selected speech endpoint in either client. Agent instructions
 can shape audible prose versus fenced reading material, but exclusive explicit
-speech selection would need code changes. Reach-out tools choose the alert/call
+speech selection would need code changes. Reach-out tools choose the call
 intent and context, not a TTS utterance.
+
+Voicestack's sender is calls-only. Messages and notifications use Nod. Chief
+calls have a pickup greeting, an optional local hold-music asset and an explicit
+hold-music switch. Quiet hours, Calls settings, Focus and outstanding-call safety
+remain enforced; ordinary calls no longer have daily/spacing caps or fallback alerts.
 
 `ttsStream` defaults false (whole-sentence WAV). With it enabled, compatible
 services provide raw PCM chunks that play as they arrive. This is streamed ASR,

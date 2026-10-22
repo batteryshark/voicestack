@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "profile": "open-voice-m1-ga-ws/1",
+  "synthetic_only": true,
+  "mapping": {"caller_id":"m1-caller","project_id":"m1-project","target_session":"ses_syntheticfixture","directory":"/synthetic/project","binding_revision":1,"expires_at":1792432800000},
+  "grant": {"caller_id":"m1-caller","project_ids":["m1-project"],"scopes":["call:request","call:status:own"],"expires_at":1792432800000},
+  "capability": {"enabled":true,"profile":"open-voice-m1-ga-ws/1","build":"fixture-38","expires_in":300},
+  "request": {"operation_id":"11111111-1111-4111-8111-111111111111","project_id":"m1-project","reason":"decision","summary":"Synthetic decision needed","expires_in":60},
+  "caller_response": {"call_id":"22222222-2222-4222-8222-222222222222","status":"ringing"},
+  "recipient_response": {"call_id":"22222222-2222-4222-8222-222222222222","status":"ringing","context":"open-voice","call_uuid":"33333333-3333-4333-8333-333333333333","owner_epoch":"44444444-4444-4444-8444-444444444444","binding_revision":1,"target_id":"55555555-5555-4555-8555-555555555555","project_id":"m1-project","caller_id":"m1-caller","reason":"decision","summary":"Synthetic decision needed","expires_at":1792429260000,"profile":"open-voice-m1-ga-ws/1"},
+  "owner_body": {"call_uuid":"33333333-3333-4333-8333-333333333333","owner_epoch":"44444444-4444-4444-8444-444444444444","binding_revision":1,"target_id":"55555555-5555-4555-8555-555555555555"},
+  "end_body": {"call_uuid":"33333333-3333-4333-8333-333333333333","owner_epoch":"44444444-4444-4444-8444-444444444444","binding_revision":1,"target_id":"55555555-5555-4555-8555-555555555555","operation_id":"66666666-6666-4666-8666-666666666666","reason":"deliberate-user"},
+  "canonical_item": {"id":"item_fixture","type":"message","role":"user","content":[{"type":"input_text","text":"Please review this synthetic thought."}]},
+  "media_response_keys": ["media_lease","media_epoch","expires_at","binding_revision","profile","limits","model","transcription","voice","semantics","cancellation"],
+  "media_ready_body": {"call_uuid":"33333333-3333-4333-8333-333333333333","owner_epoch":"44444444-4444-4444-8444-444444444444","binding_revision":1,"target_id":"55555555-5555-4555-8555-555555555555","media_epoch":"1","session_id":"sess_fixture","native_capture_ready":true},
+  "media_ready_response": {"call_id":"22222222-2222-4222-8222-222222222222","media_epoch":"1","session_id":"sess_fixture","status":"media_ready"},
+  "media_response": {"media_lease":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","media_epoch":"1","expires_at":1792429260000,"binding_revision":1,"profile":"open-voice-m1-ga-ws/1","limits":{"max_message_bytes":65536,"sample_rate":24000,"channels":1,"input_window_samples":48000,"output_window_samples":48000},"model":"local-chain-m1","transcription":"local-stt","voice":"local-default","semantics":"manual-text-one-exchange","cancellation":"narration-only"},
+  "operation_response_keys": ["operation_id","kind","hash","state","response_id","planned_inbox_id"]
+}

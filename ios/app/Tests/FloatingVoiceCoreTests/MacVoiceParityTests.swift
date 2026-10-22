@@ -4,8 +4,8 @@ import Testing
 
 /// Keep the read-only region gate in the normal swift-test path, not just a
 /// manually remembered device-suite command. Python uses only its standard library.
-/// Python inherits explicit FV_MAC_PARITY_PACKAGE_COMMIT; absent selection fails.
-/// External/WORKTREE diagnostics require explicit mode/path; no Swift fallback.
+/// The Python reader owns shared/mac-parity-ref.txt and inherits overrides,
+/// including the explicit FV_MAC_PARITY_REF=WORKTREE opt-in; no Swift fallback.
 @Suite struct MacVoiceParityTests {
     @Test
     func acceptedMacRegionsRemainInParity() throws {

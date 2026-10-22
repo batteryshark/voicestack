@@ -22,7 +22,7 @@ private final class OC240Protocol: URLProtocol, @unchecked Sendable {
     override func stopLoading() {}
 }
 
-/// Fresh synthetic DTOs through the SAME Node projection + Swift parsers as installed31.
+/// Captured DTOs through the SAME Node projection + Swift parsers as installed31.
 /// No live requests, real credentials, microphone, phone, or simulator are used.
 @Suite(.serialized) @MainActor struct OpenChamber240CompatibilityTests {
     private var root: URL {
@@ -55,7 +55,7 @@ private final class OC240Protocol: URLProtocol, @unchecked Sendable {
         return try #require(ServerEvent(json: String(data: json(object), encoding: .utf8)!))
     }
 
-    @Test(arguments: [false, true]) func syntheticIdlePagesRemainRawButNeverRenderOrNarrate(_ projected: Bool) throws {
+    @Test(arguments: [false, true]) func capturedIdlePagesRemainRawButNeverRenderOrNarrate(_ projected: Bool) throws {
         let sid = try fixture()["sessionID"] as! String
         let lease = TargetLease(sessionID: sid, generation: "fixture")
         let store = ConversationStore(target: lease), snapshot = store.beginHistorySnapshot()
@@ -68,10 +68,10 @@ private final class OC240Protocol: URLProtocol, @unchecked Sendable {
         if projected { #expect(rows[0].sender?.kind == .canvas) }
         let idleRecords = store.records.filter { (try? JSONSerialization.jsonObject(with: $0) as? [String: Any])?["type"] as? String == "idle" }
         #expect(idleRecords.count == 2 && idleRecords.allSatisfy { MessageRow($0) == nil })
-        let newestIdle = "msg_fresh240IdleNewest01"
+        let newestIdle = "msg_SYNTHETIC0007"
         #expect(HistoryAnchor.resolve(newestIdle, records: store.records)?.rowID == rows[1].id)
         #expect(HistoryAnchor.resolve(newestIdle, records: store.records)?.kind == .neighbour)
-        #expect(HistoryAnchor.resolve("msg_fresh240IdleOlder01", records: store.records)?.rowID == rows[0].id)
+        #expect(HistoryAnchor.resolve("msg_SYNTHETIC0005", records: store.records)?.rowID == rows[0].id)
         // Repeated pages remain idempotent, retaining model/tokens/finish fields.
         try store.reconcile(history: page("latestPage", projected: projected), active: false, for: lease, snapshot: snapshot)
         #expect(store.records.count == 4)

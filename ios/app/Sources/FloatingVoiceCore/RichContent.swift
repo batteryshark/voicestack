@@ -64,66 +64,42 @@ public struct CanvasDocument: Codable, Equatable {
 
 /// Fail-closed policy used by native navigation and tests. Privileged origins are never web content.
 public struct LinkPolicy {
+    public static let installManifest = "https://example-host.example-tailnet.invalid/floating-voice-ios/manifest.plist"
+    // Shared by navigation and the network rules. No encoded separators, queries, or
+    // selector syntax: documentation needing these features is deliberately unavailable.
+    private static let documentPath = "/[a-zA-Z0-9._~/-]*([#][a-zA-Z0-9_~-]+)?$"
+    // WebKit content-rule filters do not support alternation. Keep one filter per
+    // denied prefix, shared with navigation so the two policies cannot drift.
+    private static let deniedPaths = ["api", "floating-voice", "private", "auth", "admin", "login", "logout", "oauth", "session", "token", "credentials", "[.]", "/"]
+        .map { "/([a-zA-Z0-9._~-]+/)*" + $0 }
     public var privilegedHosts: Set<String>
     public var approvedManifests: Set<String>
-    public var deploymentSuffix: String
-    public init(privilegedHosts: Set<String> = [], approvedManifests: Set<String> = [], deploymentSuffix: String = "") {
+    public init(privilegedHosts: Set<String> = [], approvedManifests: Set<String> = []) {
         self.privilegedHosts = privilegedHosts; self.approvedManifests = approvedManifests
-        self.deploymentSuffix = deploymentSuffix
     }
     public func web(_ url: URL) -> Bool {
-        // Canvas links are panel selectors, never web destinations (including already-redacted keys).
-        let rawSelector = (url.query ?? "") + "&" + (url.fragment ?? "")
-        let selector = rawSelector.removingPercentEncoding ?? rawSelector
-        guard selector.range(of: "(?:^|[&#?])(?:key|view)=", options: [.regularExpression, .caseInsensitive]) == nil else { return false }
         guard url.scheme == "https", url.user == nil, url.password == nil, let host = url.host?.lowercased(),
                !privilegedHosts.contains(host), host.contains("."), !host.hasSuffix("."), !host.hasPrefix("0x"), host != "localhost", host != "::1", !host.hasSuffix(".localhost"),
                !host.contains("canvas"),
               !host.hasSuffix(".ts.net"), !host.hasSuffix(".local"), !host.contains(":"),
-              host.range(of: "^[0-9.]+$", options: .regularExpression) == nil else { return false }
-        return !url.path.lowercased().hasPrefix("/api") && !url.path.lowercased().hasPrefix("/floating-voice")
+               host.range(of: "^[0-9.]+$", options: .regularExpression) == nil,
+               host.range(of: "^[a-z0-9-]+([.][a-z0-9-]+)+$", options: .regularExpression) != nil,
+               url.port == nil || (1...65535).contains(url.port!) else { return false }
+        let prefix = Self.originPrefix(url)
+        let raw = url.absoluteString
+        guard raw.hasPrefix(prefix) else { return false }
+        let path = String(raw.dropFirst(prefix.count - 1))
+        return path.range(of: "^" + Self.documentPath, options: .regularExpression) != nil
+            && !Self.deniedPaths.contains { path.range(of: "^" + $0, options: [.regularExpression, .caseInsensitive]) != nil }
     }
     public func install(_ url: URL) -> URL? {
-        install(url.absoluteString)
-    }
-    private static func strictURI(_ raw: String) -> Bool {
-        !raw.isEmpty && raw.range(of: "[^A-Za-z0-9._~:/?@!$&'()*+,;=%-]", options: .regularExpression) == nil &&
-            raw.range(of: "%(?![0-9a-fA-F]{2})", options: .regularExpression) == nil
-    }
-    /// String entry point validates raw spelling before Foundation can normalize it.
-    public func install(_ value: String) -> URL? {
-        let prefix = "itms-services://?"
-        guard Self.strictURI(value), value.hasPrefix(prefix) else { return nil }
-        let fields = value.dropFirst(prefix.count).components(separatedBy: "&")
-        var items: [(String, String)] = []
-        for field in fields {
-            guard let at = field.firstIndex(of: "="),
-                  let key = String(field[..<at]).removingPercentEncoding,
-                  let val = String(field[field.index(after: at)...]).removingPercentEncoding else { return nil }
-            items.append((key, val))
-        }
-        guard items.count == 2, items.filter({ $0.0 == "action" && $0.1 == "download-manifest" }).count == 1,
-                let raw = items.first(where: { $0.0 == "url" })?.1, Self.strictURI(raw),
-                let authorityEnd = raw.range(of: "^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?=[/?]|$)", options: .regularExpression) else { return nil }
-        let authority = String(raw[authorityEnd]).dropFirst("https://".count)
-        if let colon = authority.firstIndex(of: ":") {
-            guard let port = Int(authority[authority.index(after: colon)...]), port <= 65535 else { return nil }
-        }
-        guard
-                let manifest = URL(string: raw), manifest.scheme == "https", manifest.user == nil, manifest.password == nil,
-                manifest.fragment == nil,
-               let host = Self.normalizedHost(manifest), Self.installHost(host) else { return nil }
-        if !deploymentSuffix.isEmpty {
-            guard deploymentSuffix.hasPrefix("."), deploymentSuffix.count <= 254,
-                  Self.installHost(String(deploymentSuffix.dropFirst())), host.hasSuffix(deploymentSuffix),
-                  approvedManifests.isEmpty || approvedManifests.contains(raw) else { return nil }
-        } else {
-            guard !approvedManifests.isEmpty, approvedManifests.contains(raw) else { return nil }
-        }
-        return manifest
-    }
-    private static func installHost(_ host: String) -> Bool {
-        host.count <= 253 && host.range(of: "^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+ts\\.net$", options: .regularExpression) != nil
+        // Configuration may only narrow this single initial URL. Require one canonical
+        // wrapper spelling, not queryItems' decoded interpretation of ambiguous input.
+        let encoded = Self.installManifest.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~"))!
+        guard approvedManifests.contains(Self.installManifest),
+              url.absoluteString == "itms-services://?action=download-manifest&url=" + encoded else { return nil }
+        // No fetch here. Confirmation precedes Apple's handler; its redirect chain is not ours.
+        return URL(string: Self.installManifest)
     }
     public static func normalizedHost(_ url: URL) -> String? {
         guard var host = url.host?.lowercased(), !host.isEmpty else { return nil }
@@ -132,14 +108,25 @@ public struct LinkPolicy {
         return host
     }
     public func contentRules(for url: URL) -> String? {
-        guard web(url), let host = url.host else { return nil }
-        let prefix = "https://" + host + (url.port.map { ":\($0)" } ?? "") + "/"
-        let rules: [[String: Any]] = [
+        guard web(url) else { return nil }
+        let prefix = NSRegularExpression.escapedPattern(for: String(Self.originPrefix(url).dropLast()))
+        var rules: [[String: Any]] = [
             ["trigger": ["url-filter": ".*"], "action": ["type": "block"]],
-            ["trigger": ["url-filter": "^" + NSRegularExpression.escapedPattern(for: prefix)], "action": ["type": "ignore-previous-rules"]],
-            ["trigger": ["url-filter": ".*/api.*"], "action": ["type": "block"]],
-            ["trigger": ["url-filter": ".*/floating-voice.*"], "action": ["type": "block"]]
+            ["trigger": ["url-filter": "^" + prefix + Self.documentPath,
+                         "url-filter-is-case-sensitive": true,
+                         "resource-type": ["document", "image", "style-sheet", "font"],
+                         "load-context": ["top-frame"]], "action": ["type": "ignore-previous-rules"]]
+        ]
+        rules += Self.deniedPaths.map { ["trigger": ["url-filter": "^" + prefix + $0 + ".*"], "action": ["type": "block"]] }
+        rules += [
+            // No embedded browsing contexts, object/embed elements, or cookie authentication.
+            ["trigger": ["url-filter": ".*", "load-context": ["child-frame"]], "action": ["type": "block"]],
+            ["trigger": ["url-filter": ".*"], "action": ["type": "css-display-none", "selector": "iframe, frame, object, embed"]],
+            ["trigger": ["url-filter": ".*"], "action": ["type": "block-cookies"]]
         ]
         return (try? JSONSerialization.data(withJSONObject: rules)).flatMap { String(data: $0, encoding: .utf8) }
+    }
+    private static func originPrefix(_ url: URL) -> String {
+        "https://" + (url.host?.lowercased() ?? "") + (url.port.map { ":\($0)" } ?? "") + "/"
     }
 }

@@ -6,17 +6,22 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
 import { createBridge } from './server.mjs';
+import { unpairedDesktop } from './fixtures/synthetic-desktop.mjs';
 
 const exec = promisify(execFile);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-test('unmodified build-18 HTTP transport/parser accepts new-bridge comments, clean rotation and a fresh connection', { timeout: 30000 }, async () => {
+test('unmodified build-18 HTTP transport/parser accepts new-bridge comments, clean rotation and a fresh connection', { timeout: 30000 }, async t => {
+  try { await exec('git', ['cat-file', '-e', '4d572b1^{commit}'], {cwd: root}); }
+  catch { t.skip('Private historical build-18 commit is intentionally absent from snapshot publication'); return; }
   const env = { ...process.env, DEVELOPER_DIR: '/Applications/Xcode.app/Contents/Developer' };
   const { stdout: source } = await exec('git', ['show', '4d572b1:app/Sources/FloatingVoiceCore/HTTPStream.swift'], { cwd: root });
-  const parent = path.join(root, 'output', 'compatibility');
-  await fs.mkdir(parent, { recursive: true });
+  await fs.mkdir(path.join(os.tmpdir(), 'opencode'), { recursive: true });
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), 'opencode/fv-build18-compat-'));
+  t.after(() => fs.rm(parent, { recursive: true }));
   const dir = await fs.mkdtemp(path.join(parent, 'build18-'));
   await fs.writeFile(path.join(dir, 'Build18.swift'), source);
   // Logging-only stubs: the HTTP transport and SSE parser are the exact build-18 source.
@@ -68,7 +73,7 @@ final class StageDiagnostics {
     setInterval: (fn, ms) => setInterval(fn, ms / 1000), clearInterval,
   };
   const bridge = createBridge({ credentials: { device: () => ({ sessionID: 'ses_fixture', generation: 'fixture' }) },
-    discover: () => upstream.address().port, eventClock: clock, diagnostic: e => logs.push(e) });
+    ...unpairedDesktop(t, upstream), eventClock: clock, diagnostic: e => logs.push(e) });
   bridge.listen(0, '127.0.0.1'); await once(bridge, 'listening');
   try {
     const url = `http://127.0.0.1:${bridge.address().port}/floating-voice/v1/sessions/ses_fixture/events`;
@@ -82,10 +87,13 @@ final class StageDiagnostics {
   }
 });
 
-test('new client handles the build-18 bridge/client 75s quiet-close race and reconnects read-only', { timeout: 120000 }, async () => {
+test('new client handles the build-18 bridge/client 75s quiet-close race and reconnects read-only', { timeout: 120000 }, async t => {
+  try { await exec('git', ['cat-file', '-e', '4d572b1^{commit}'], {cwd: root}); }
+  catch { t.skip('Private historical build-18 commit is intentionally absent from snapshot publication'); return; }
   const env = { ...process.env, DEVELOPER_DIR: '/Applications/Xcode.app/Contents/Developer' };
-  const parent = path.join(root, 'output', 'compatibility');
-  await fs.mkdir(parent, { recursive: true });
+  await fs.mkdir(path.join(os.tmpdir(), 'opencode'), { recursive: true });
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), 'opencode/fv-old-bridge-compat-'));
+  t.after(() => fs.rm(parent, { recursive: true }));
   const dir = await fs.mkdtemp(path.join(parent, 'old-bridge-'));
   const { stdout: oldServer } = await exec('git', ['show', '4d572b1:bridge/server.mjs'], { cwd: root });
   const oldPath = path.join(dir, 'build18-server.mjs');

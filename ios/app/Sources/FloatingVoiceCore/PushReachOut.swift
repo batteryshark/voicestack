@@ -71,12 +71,15 @@ public struct PushPolicySync: Codable {
     public func allowsCall(at date: Date) -> Bool {
         desired.callsEligible(at: date, acknowledged: acknowledged, syncedAt: syncedAt)
     }
+    /// Pilot admission retains the acknowledged policy and current-zone fence.
+    public func allowsPilotCall(at date: Date, timeZone: String) -> Bool {
+        desired.timeZone == timeZone && allowsCall(at: date)
+    }
 }
 
 public struct ReachOutContext {
     public let session: String
     public let messageID: String?
-    public let reviewURL: URL?
     public init(record: [String: Any], reachoutID: String, now: Date = Date(), invitation: PushInvitation? = nil) throws {
         guard record["reachoutID"] as? String == reachoutID,
               let session = record["session"] as? String, session.hasPrefix("ses_"),
@@ -93,9 +96,5 @@ public struct ReachOutContext {
         }
         self.session = session
         messageID = record["messageID"] as? String
-        reviewURL = (record["url"] as? String).flatMap(URL.init(string:))
-    }
-    public static func categoryAllowed(_ category: String) -> Bool {
-        ["NEED", "READY_TO_TRY", "URGENT_FALLBACK"].contains(category)
     }
 }

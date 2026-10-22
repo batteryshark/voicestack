@@ -6,17 +6,23 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createBridge } from './server.mjs';
+import { unpairedDesktop } from './fixtures/synthetic-desktop.mjs';
 import { PushStore } from './push-store.mjs';
 import { PushService } from './push-service.mjs';
 
 const exec = promisify(execFile), root = fileURLToPath(new URL('../', import.meta.url));
 const ref = '0618f79'; // Build 23 app/core, before any build-24 Canvas changes.
-test('unmodified build-23 core works against build-24 projection, routes, push and event lifetime', { timeout: 120000 }, async () => {
+test('unmodified build-23 core works against build-24 projection, routes, push and event lifetime', { timeout: 120000 }, async t => {
+  try { await exec('git', ['cat-file', '-e', `${ref}^{commit}`], {cwd: root}); }
+  catch { t.skip('Private historical build-23 commit is intentionally absent from snapshot publication'); return; }
   const env = { ...process.env, DEVELOPER_DIR: '/Applications/Xcode.app/Contents/Developer' };
-  const parent = path.join(root, 'output/compatibility'); await fs.mkdir(parent, { recursive: true });
+  await fs.mkdir(path.join(os.tmpdir(), 'opencode'), { recursive: true });
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), 'opencode/fv-build23-compat-'));
+  t.after(() => fs.rm(parent, { recursive: true }));
   const dir = await fs.mkdtemp(path.join(parent, 'build23-'));
   const { stdout: commit } = await exec('git', ['rev-parse', ref], { cwd: root });
   const { stdout: build } = await exec('git', ['show', `${ref}:native/build.py`], { cwd: root });
@@ -44,7 +50,7 @@ test('unmodified build-23 core works against build-24 projection, routes, push a
   const mutations = [], receipts = [], requests = [], logs = [], apns = [], selectionModes = [], eventResponses = new Set();
   let repaired = false, seeded = false, initialHistory = false, eventConnections = 0;
   const record = { id: 'msg_canvas_fixture', type: 'assistant', content: [
-    { type: 'text', text: 'Canvas created. Before learning: https://host-19.example.ts.net:9444/path. [Apple](https://apple.com/iphone) [Panel](https://opaque-viewer.fixture.invalid/#key=\nSYNTHETIC_WRAPPED_TOKEN&view=11111111-1111-4111-8111-111111111111)' },
+    { type: 'text', text: 'Canvas created. Before learning: https://unlearned.fixture.ts.net:9444/path. [Apple](https://apple.com/iphone) [Panel](https://opaque-viewer.fixture.invalid/#key=\nSYNTHETIC_WRAPPED_TOKEN&view=11111111-1111-4111-8111-111111111111)' },
     { type: 'tool', id: 'call_fixture', name: 'canvas_show', executed: false, state: { status: 'completed', metadata: { title: 'Synthetic panel', viewId: '11111111-1111-4111-8111-111111111111', revision: 1, truncated: false }, input: { title: 'Synthetic panel', summary: 'Synthetic only', format: 'openui', source: 'root = Stack([TextContent("DO_NOT_PROJECT_SOURCE")])' }, content: [{ type: 'text', text: 'https://opaque-viewer.fixture.invalid/#key=SYNTHETIC_VIEWER_TOKEN&view=11111111-1111-4111-8111-111111111111' }] } }
   ] };
   const dataEvent = () => 'data: ' + JSON.stringify({ type: 'fixture.projection', data: { sessionID: sid, record } }) + '\n\n';
@@ -80,7 +86,12 @@ test('unmodified build-23 core works against build-24 projection, routes, push a
       if (req.url === `/api/session/${sid}/prompt`) {
         if (!seeded) {
           seeded = true;
-          await push.send({ id: 'compat-ready', kind: 'ready-to-try', reason: 'build', session: sid, title: 'Synthetic update', body: 'Synthetic only', url: 'itms-services://?action=download-manifest&url=' + encodeURIComponent('https://build-fixture.ts.net/build/manifest.plist') });
+          // ready-to-try can no longer be sent (Nod handles messages). A record written before
+          // that change must stay readable and openable by an older phone build.
+          const at = Date.now();
+          push.store.data.records['r:compat-ready'] = { request: { id: 'compat-ready', kind: 'ready-to-try', reason: 'build', session: sid, title: 'Synthetic update', body: 'Synthetic only', url: 'itms-services://?action=download-manifest&url=' + encodeURIComponent('https://build-fixture.example-tailnet.invalid/build/manifest.plist') },
+            createdAt: at, expiry: at + 3600000, targets: { 'd:synthetic23': { deviceID: 'synthetic23', reason: 'ordinary', state: 'apns-accepted', alert: { state: 'apns-accepted', attemptAt: at } } } };
+          push.store.save();
           await push.send({ id: 'compat-call', kind: 'urgent-call', reason: 'decision', session: sid, title: 'Synthetic call', body: 'Never sent to a phone' });
         }
         return send({ accepted: true });
@@ -91,7 +102,7 @@ test('unmodified build-23 core works against build-24 projection, routes, push a
   upstream.listen(0, '127.0.0.1'); await once(upstream, 'listening');
   // Shorten only bridge event-lifetime scheduling; the old client/HTTP/parser/debounce remain unmodified.
   const clock = { setTimeout: (f, ms) => setTimeout(f, ms / 1000), clearTimeout, setInterval: (f, ms) => setInterval(f, ms / 1000), clearInterval };
-  const bridge = createBridge({ credentials: { device: auth => { assert.equal(auth, 'Bearer synthetic-build23-phone'); return device; }, save() { selectionModes.push(device.mode); } }, chief: () => sid, discover: () => upstream.address().port, push, eventClock: clock, diagnostic: e => logs.push(e) });
+  const bridge = createBridge({ credentials: { device: auth => { assert.equal(auth, 'Bearer synthetic-build23-phone'); return device; }, save() { selectionModes.push(device.mode); } }, chief: () => sid, ...unpairedDesktop(t, upstream), push, eventClock: clock, diagnostic: e => logs.push(e) });
   bridge.listen(0, '127.0.0.1'); await once(bridge, 'listening');
   try {
     const { stdout, stderr } = await exec(binary, [String(bridge.address().port)], { cwd: root, env, timeout: 30000, maxBuffer: 2 * 1024 * 1024 });
@@ -108,7 +119,7 @@ test('unmodified build-23 core works against build-24 projection, routes, push a
     assert.deepEqual(mutations.find(x => x.path.includes('/interrupt')).body, {});
     assert.equal(push.device(device.deviceID).enrollment.build, '23');
     assert.deepEqual(receipts.map(x => x.event), ['notification-opened', 'reported', 'ringing', 'answered', 'ended', 'ended']);
-    assert.equal(apns.length, 2, 'receipt replay must not dispatch another notification/call');
+    assert.equal(apns.length, 1, 'only the call is dispatched; receipt replay never dispatches again');
     const terminal = push.store.data.records['r:compat-call'].targets['d:synthetic23'];
     assert.equal(terminal.receipt, 'answered'); // Preserve answered truth; termination is a separate durable field.
     assert.ok(terminal.endedAt); assert.equal(terminal.terminalReceipt.event, 'ended');

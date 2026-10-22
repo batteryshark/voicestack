@@ -59,6 +59,7 @@ fileprivate final class PlaybackCompletionProof: @unchecked Sendable {
         self.revision += 1; ends.removeAll(keepingCapacity: true)
         return through
     }
+    func snapshot() -> Int { lock.lock(); defer { lock.unlock() }; return through }
 }
 
 /// Bounded ledger for the <=4 scheduled PCM buffers. The producer retains carry
@@ -84,7 +85,18 @@ fileprivate final class PlaybackCompletionProof: @unchecked Sendable {
     public private(set) var skippedFrames = 0
     private var ready: [CheckedContinuation<Void, Never>] = []
     private let completionProof = PlaybackCompletionProof()
+    private var deliveryThrough = 0, deliveryUncertain = false
     public init(queue: PlaybackBufferScheduler) { self.queue = queue }
+    /// Observation only: unlike `position`, this cursor can NEVER cross an unknown
+    /// skipped source buffer. Existing suffix repair/position algorithms are unchanged.
+    public func deliverySnapshot(renderedFrames: Int? = nil) -> (samples: Int, known: Bool) {
+        if !deliveryUncertain {
+            var proven = completionProof.snapshot()
+            if let renderedFrames { proven = max(proven,renderBase + max(0,renderedFrames)) }
+            deliveryThrough = max(deliveryThrough,min(submitted,proven))
+        }
+        return (deliveryThrough,!deliveryUncertain)
+    }
     public func append(_ pcm: Data, token: PlaybackBufferScheduler.Token) {
         precondition(!suspended && segments.count < PlaybackBufferScheduler.highWater)
         segments.append(Segment(token: token, first: submitted, pcm: pcm)); submitted += pcm.count / 2
@@ -109,6 +121,7 @@ fileprivate final class PlaybackCompletionProof: @unchecked Sendable {
     /// unknown partial buffer or abandon the rest of the current utterance.
     public func suspend(renderedFrames: Int?) -> [PlaybackBufferScheduler.Token] {
         guard !suspended else { return [] }
+        _ = deliverySnapshot(renderedFrames:renderedFrames)
         let completedThrough = completionProof.retire(revision: revision)
         suspended = true; revision += 1
         position = max(position, min(submitted, completedThrough))
@@ -118,6 +131,7 @@ fileprivate final class PlaybackCompletionProof: @unchecked Sendable {
         else if let unknown = segments.first(where: { $0.end > position }) {
             skippedFrames = unknown.end - max(position, unknown.first)
             position = unknown.end
+            deliveryUncertain = true
         }
         var consumed: [PlaybackBufferScheduler.Token] = []
         segments = segments.compactMap { segment in

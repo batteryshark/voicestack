@@ -2,6 +2,18 @@ import AVFoundation
 import Foundation
 import UIKit
 
+/// A cold player can publish a non-nil node time with neither coordinate valid.
+/// AVFoundation throws an Objective-C exception if asked to convert that time.
+private enum PlaybackClock {
+    static func sourceFrame(player: AVAudioPlayerNode, nodeTime: AVAudioTime?) -> Int? {
+        guard let nodeTime, nodeTime.isSampleTimeValid || nodeTime.isHostTimeValid,
+              let time = player.playerTime(forNodeTime: nodeTime),
+              time.isSampleTimeValid, time.sampleRate.isFinite, time.sampleRate > 0,
+              time.sampleTime >= 0 else { return nil }
+        return Int(exactly: time.sampleTime)
+    }
+}
+
 /// Small tap-safe provenance latch. No audio, text or actor references cross it.
 private final class CaptureOriginLatch: @unchecked Sendable {
     private let lock = NSLock()
@@ -422,7 +434,7 @@ final class AudioSessionCoordinator {
 }
 
 @MainActor
-final class IOSAudio: AudioInput, AudioOutput, LevelReporting, PlaybackRepairReporting, VoiceTurnProbeInput, DuplexReporting, CaptureOriginReporting, AutomaticCutInOutput {
+final class IOSAudio: AudioInput, AudioOutput, LevelReporting, PlaybackRepairReporting, VoiceTurnProbeInput, DuplexReporting, CaptureOriginReporting, AutomaticCutInOutput, CaptureProgressReporting {
     private var latestMicRMS = 0.0
     var onCaptureState: ((VoiceCaptureState) -> Void)?
     var onDuplexChange: (() -> Void)?
@@ -456,6 +468,7 @@ final class IOSAudio: AudioInput, AudioOutput, LevelReporting, PlaybackRepairRep
     private var recoverableEpochs: Set<Int> = []
     private var playbackQueue = PlaybackBufferScheduler()
     private var playbackContinuity: PlaybackContinuity?
+    private var preparedProgress: (@MainActor (PlaybackSourceProgress) -> Void)?
     private var automaticCutInPaused = false
     private var graphRepairBarrier = PlaybackGraphRepairBarrier()
     private var cutInGain: Float = 1
@@ -474,6 +487,9 @@ final class IOSAudio: AudioInput, AudioOutput, LevelReporting, PlaybackRepairRep
     private var ingressState: CaptureIngress?
     private var requestedFormat: AVAudioFormat?
     private var capturedFrames = 0
+    var captureProgress: CaptureProgress {
+        CaptureProgress(producedFrames:ingressState?.snapshot().frames ?? 0, deliveredFrames:capturedFrames)
+    }
     var onProbeEvent: ((String) -> Void)?
     private var configurationObserver: NSObjectProtocol?
     private(set) var configurationChanges = 0
@@ -489,6 +505,17 @@ final class IOSAudio: AudioInput, AudioOutput, LevelReporting, PlaybackRepairRep
     private var graphGeneration = 0
     private var inputHandler: ((AVAudioPCMBuffer) -> Void)?
     private var renderHandler: ((AVAudioPCMBuffer, AVAudioTime) -> Void)?
+    /// Launch-only playback probe: copies main-mixer render output (pre-hardware) from the one existing tap.
+    var probeRecorder: ProbeRenderRecorder?
+    func probeIOFormats() -> [String: Any] {
+        func describe(_ f: AVAudioFormat) -> [String: Any] { ["rate": f.sampleRate, "channels": f.channelCount, "common": f.commonFormat.rawValue, "interleaved": f.isInterleaved] }
+        let session = AVAudioSession.sharedInstance()
+        return ["inputIn": describe(engine.inputNode.inputFormat(forBus: 0)), "inputOut": describe(engine.inputNode.outputFormat(forBus: 0)),
+                "mixerOut": describe(engine.mainMixerNode.outputFormat(forBus: 0)), "outputIn": describe(engine.outputNode.inputFormat(forBus: 0)),
+                "outputOut": describe(engine.outputNode.outputFormat(forBus: 0)), "sessionRate": session.sampleRate,
+                "ioBuffer": session.ioBufferDuration, "voiceProcessing": voiceProcessingReady,
+                "outputs": session.currentRoute.outputs.map(\.portType.rawValue), "mode": session.mode.rawValue]
+    }
     private var usingFixture = false
     /// Device-probe-only fault injection into the real engine/notification recovery path.
     func probeConfigurationChange() {
@@ -730,9 +757,11 @@ final class IOSAudio: AudioInput, AudioOutput, LevelReporting, PlaybackRepairRep
     private func installRenderHandler(_ owner: Int) {
         let graph = graphGeneration
         let dropoutMeter = renderDropouts
-        let sourceMeter = sourceSignals, renderPlayer = player
+        let sourceMeter = sourceSignals
+        let recorder = probeRecorder
         // Meter the render path, not downloaded/scheduled TTS chunks (which can be 0.8 s ahead).
         renderHandler = { [weak self] buffer, time in
+            recorder?.append(buffer)
             var sum = 0.0
             var validSamples = false
             let count = Int(buffer.frameLength), channels = Int(buffer.format.channelCount)
@@ -745,16 +774,23 @@ final class IOSAudio: AudioInput, AudioOutput, LevelReporting, PlaybackRepairRep
             let rms = count > 0 && channels > 0 ? sqrt(sum / Double(count * channels)) : 0
             dropoutMeter.consume(rms: rms, frames: count, rate: buffer.format.sampleRate, graph: graph, valid: validSamples)
             let signalRevision = sourceMeter.renderRevision
-            // Compare THIS tap buffer, not a later player render quantum.
-            let playerFrame = renderPlayer.playerTime(forNodeTime: time).map { Int($0.sampleTime) }
-            let handoffs = sourceMeter.render(rms: rms, frames: count, renderRate: buffer.format.sampleRate,
-                sourceFrame: playerFrame, graph: graph, now: ProcessInfo.processInfo.systemUptime, revision: signalRevision)
+            let observedAt = ProcessInfo.processInfo.systemUptime
+            let signalRate = buffer.format.sampleRate
+            // Never call AVAudioPlayerNode from the tap thread: its player-time conversion waits
+            // for the engine lock while the main thread's disconnect/stop waits for this tap
+            // (device 0x8BADF00D, builds 41/44). Convert this tap's timestamp on the main
+            // actor, retaining its observation time so actor delay cannot inflate the gap.
 #if DEBUG && targetEnvironment(simulator)
             // Copy render samples before the tap returns. Never substitute scheduled TTS bytes.
             let rendered = SimulatorAudioProof.monoPCM(buffer)
             let renderRate = Int(buffer.format.sampleRate)
 #endif
             Task { @MainActor in
+                guard let self, self.capture.admits(owner), self.graphGeneration == graph,
+                      sourceMeter.renderRevision == signalRevision else { return }
+                let playerFrame = PlaybackClock.sourceFrame(player: self.player, nodeTime: time)
+                let handoffs = sourceMeter.render(rms: rms, frames: count, renderRate: signalRate,
+                    sourceFrame: playerFrame, graph: graph, now: observedAt, revision: signalRevision)
                 for handoff in handoffs {
                     StageDiagnostics.shared.recordPlayback(.routeHandoff,
                         fields: [.routeHandoffGapMs: handoff.gapMs, .routeHandoffGeneration: Double(handoff.generation),
@@ -762,7 +798,6 @@ final class IOSAudio: AudioInput, AudioOutput, LevelReporting, PlaybackRepairRep
                             .utteranceOrdinal: Double(handoff.ordinal), .graphGeneration: Double(graph)],
                         attempt: handoff.attempt, callToken: handoff.callToken)
                 }
-                guard let self, self.capture.admits(owner), self.graphGeneration == graph else { return }
                 self.recordVoiceProcessing()
                 self.onLevel?(self.player.isPlaying && rms.isFinite ? rms : 0)
                 if SpeakerEchoProbe.enabled {
@@ -782,13 +817,95 @@ final class IOSAudio: AudioInput, AudioOutput, LevelReporting, PlaybackRepairRep
     /// Only unexpected repairs spend the 3/10s budget. Deliberate route tickets
     /// must match an observed route before a repair can carry their generation.
     private func scheduleRecovery(_ owner: Int, forceRepair: Bool = false, context: RouteRecoveryContext? = nil) {
-        repairRequired = repairRequired || forceRepair
         guard !recoveryBudget.paused else { return }
+        // Every caller has already selected a rebuild (including route-format
+        // changes). Keep that demand even while the one worker awaits readiness.
+        repairRequired = true
         pendingRecovery = context ?? coordinator.engineRecoveryContext()
         // A synchronous configuration notification can arrive before open() returns and
         // CaptureLifecycle marks capturing. Re-check full admission after the debounce.
         guard coordinator.mayRunMedia, capture.generation == owner, playerAttached, !usingFixture,
               recoveryTask == nil, !graphRepairBarrier.inProgress else { return }
+        let repairOwner = beginRouteRepair()
+        let debounce: UInt64 = playbackActive ? 0 : 150_000_000
+        let callEpoch = coordinator.call?.epoch
+        recoveryJob += 1
+        let job = recoveryJob
+        recoveryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: debounce)
+            guard let self else { return }
+            defer {
+                if self.recoveryJob == job { self.recoveryTask = nil; self.repairRequired = false; self.pendingRecovery = nil }
+            }
+            var repairOwner = repairOwner
+            while !Task.isCancelled, self.capture.admits(owner), self.coordinator.mayRunMedia,
+                  self.coordinator.call?.epoch == callEpoch, self.recoveryJob == job {
+                // Consume only this batch. A later notification remains pending
+                // through install/readiness and is drained by this same worker.
+                let cause = self.pendingRecovery ?? self.coordinator.engineRecoveryContext()
+                self.repairRequired = false
+                guard self.recoveryBudget.admit(cause, now: ProcessInfo.processInfo.systemUptime) else {
+                    self.pauseRouteCapture(cause); return
+                }
+                self.restartCount += 1
+                do {
+                    self.onCaptureState?(.repairing)
+                    self.recordPlayback(.engineStop, [.stopCause: Double(PlaybackStopCause.routeRecovery.rawValue)])
+                    self.engine.stop(); self.player.stop() // PCM/utterance/HTTP ownership survives this graph repair.
+                    try self.coordinator.prepareEngineRoute()
+                    self.recordRecovery(cause, .requested)
+                    self.graphAdmission.installed(self.graphGeneration)
+                    if self.tapInstalled { self.engine.inputNode.removeTap(onBus: 0); self.tapInstalled = false }
+                    if self.outputTapInstalled { self.engine.mainMixerNode.removeTap(onBus: 0); self.outputTapInstalled = false }
+                    let format = self.engine.inputNode.outputFormat(forBus: 0)
+                    guard format.sampleRate > 0, format.channelCount > 0 else { throw ClientError("Audio route has no usable microphone") }
+                    self.requestedFormat = format
+                    self.ingressState = CaptureIngress()
+                    self.installInputHandler(owner, hardware: true)
+                    let handler = self.inputHandler!
+                    self.engine.inputNode.installTap(onBus: 0, bufferSize: 960, format: format) { buffer, _ in handler(buffer) }
+                    self.tapInstalled = true
+                    if self.voiceProcessingReady { self.engine.connect(self.engine.mainMixerNode, to: self.engine.outputNode, format: format) }
+                    self.installRenderHandler(owner)
+                    self.engine.mainMixerNode.installTap(onBus: 0, bufferSize: 1024, format: nil, block: self.renderHandler!)
+                    self.outputTapInstalled = true
+                    self.engine.prepare(); try self.engine.start()
+                    self.installedIO = self.ioFormats; self.observedRoute = self.coordinator.currentPhoneRoute
+                    self.recordPlayback(.engineStart, [.stopCause: Double(PlaybackStopCause.routeRecovery.rawValue)])
+                    self.recordVoiceProcessing(force: true)
+                    let deadline = Date().addingTimeInterval(3)
+                    self.snapshot(.begin); self.onProbeEvent?("restarted")
+                    while self.capture.admits(owner), !Task.isCancelled, self.coordinator.mayRunMedia,
+                          self.coordinator.call?.epoch == callEpoch, self.recoveryJob == job {
+                        if self.repairRequired { break }
+                        if self.engine.isRunning && self.ingressState?.snapshot().ready == true {
+                            guard self.graphRepairBarrier.replacementInstalled(repairOwner) else { return }
+                            // Keep PCM sealed across the whole repair chain: an
+                            // unknown cursor may skip ONE buffer, not one/event.
+                            if !self.automaticCutInPaused {
+                                try self.resumeRetainedPlayback?()
+                                self.playbackContinuity?.startRetainedRun {
+                                    self.player.play()
+                                    self.sourceSignals.start(token: self.playbackOrdinal)
+                                }
+                            }
+                            self.recordRecovery(cause, .recovered); self.onCaptureState?(.running); return
+                        }
+                        guard Date() < deadline else { throw ClientError("Microphone did not recover after route change") }
+                        try await Task.sleep(nanoseconds: 50_000_000)
+                    }
+                    guard !Task.isCancelled, self.capture.admits(owner), self.coordinator.mayRunMedia,
+                          self.coordinator.call?.epoch == callEpoch, self.recoveryJob == job else { return }
+                    repairOwner = self.beginRouteRepair()
+                } catch {
+                    guard self.capture.admits(owner), !Task.isCancelled, self.coordinator.mayRunMedia,
+                          self.coordinator.call?.epoch == callEpoch, self.recoveryJob == job else { return }
+                    self.pauseRouteCapture(cause); return
+                }
+            }
+        }
+    }
+    private func beginRouteRepair() -> Int {
         // onDuplexChange below may synchronously cancel recognition and roll
         // back an automatic pause while this OLD engine is still running.
         let repairOwner = graphRepairBarrier.begin()
@@ -796,7 +913,6 @@ final class IOSAudio: AudioInput, AudioOutput, LevelReporting, PlaybackRepairRep
             sourceSignals.beginHandoff(generation: pendingRecovery.generation,
                 now: ProcessInfo.processInfo.systemUptime)
         }
-        let debounce: UInt64 = playbackActive ? 0 : 150_000_000
         suspendPlaybackForRouteRepair()
         // Close admission BEFORE the 150ms debounce. Old taps cannot make this
         // gate ready; only frames from the installed replacement generation can.
@@ -807,71 +923,7 @@ final class IOSAudio: AudioInput, AudioOutput, LevelReporting, PlaybackRepairRep
         graphGeneration += 1
         ingressState?.invalidate()
         onDuplexChange?()
-        let callEpoch = coordinator.call?.epoch
-        recoveryJob += 1
-        let job = recoveryJob
-        recoveryTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: debounce)
-            guard let self, !Task.isCancelled, self.capture.admits(owner), self.coordinator.mayRunMedia,
-                  self.coordinator.call?.epoch == callEpoch, self.recoveryJob == job else { return }
-            defer {
-                if self.recoveryJob == job { self.recoveryTask = nil; self.repairRequired = false; self.pendingRecovery = nil }
-            }
-            // voice-turns closed graph admission before debounce. Install a fresh
-            // generation even when the format is unchanged; old taps cannot reopen it.
-            let cause = self.pendingRecovery ?? self.coordinator.engineRecoveryContext()
-            guard self.recoveryBudget.admit(cause, now: ProcessInfo.processInfo.systemUptime) else {
-                self.pauseRouteCapture(cause); return
-            }
-            self.restartCount += 1
-            do {
-                self.onCaptureState?(.repairing)
-                self.recordPlayback(.engineStop, [.stopCause: Double(PlaybackStopCause.routeRecovery.rawValue)])
-                self.engine.stop(); self.player.stop() // PCM/utterance/HTTP ownership survives this graph repair.
-                try self.coordinator.prepareEngineRoute()
-                self.recordRecovery(cause, .requested)
-                self.graphAdmission.installed(self.graphGeneration)
-                if self.tapInstalled { self.engine.inputNode.removeTap(onBus: 0); self.tapInstalled = false }
-                if self.outputTapInstalled { self.engine.mainMixerNode.removeTap(onBus: 0); self.outputTapInstalled = false }
-                let format = self.engine.inputNode.outputFormat(forBus: 0)
-                guard format.sampleRate > 0, format.channelCount > 0 else { throw ClientError("Audio route has no usable microphone") }
-                self.requestedFormat = format
-                self.ingressState = CaptureIngress()
-                self.installInputHandler(owner, hardware: true)
-                let handler = self.inputHandler!
-                self.engine.inputNode.installTap(onBus: 0, bufferSize: 960, format: format) { buffer, _ in handler(buffer) }
-                self.tapInstalled = true
-                if self.voiceProcessingReady { self.engine.connect(self.engine.mainMixerNode, to: self.engine.outputNode, format: format) }
-                self.installRenderHandler(owner)
-                self.engine.mainMixerNode.installTap(onBus: 0, bufferSize: 1024, format: nil, block: self.renderHandler!)
-                self.outputTapInstalled = true
-                self.engine.prepare(); try self.engine.start()
-                self.installedIO = self.ioFormats; self.observedRoute = self.coordinator.currentPhoneRoute
-                guard self.graphRepairBarrier.replacementInstalled(repairOwner) else { return }
-                if !self.automaticCutInPaused {
-                    try self.resumeRetainedPlayback?()
-                    self.playbackContinuity?.startRetainedRun {
-                        self.player.play()
-                        self.sourceSignals.start(token: self.playbackOrdinal)
-                    }
-                }
-                self.recordPlayback(.engineStart, [.stopCause: Double(PlaybackStopCause.routeRecovery.rawValue)])
-                self.recordVoiceProcessing(force: true)
-                let deadline = Date().addingTimeInterval(3)
-                self.snapshot(.begin); self.onProbeEvent?("restarted")
-                // Keep the task alive to detect a restarted engine that never supplies frames.
-                while self.capture.admits(owner), !Task.isCancelled, self.coordinator.mayRunMedia, self.coordinator.call?.epoch == callEpoch {
-                    if self.engine.isRunning && self.ingressState?.snapshot().ready == true {
-                        self.recordRecovery(cause, .recovered); self.onCaptureState?(.running); return
-                    }
-                    guard Date() < deadline else { throw ClientError("Microphone did not recover after route change") }
-                    try await Task.sleep(nanoseconds: 50_000_000)
-                }
-            } catch {
-                guard self.capture.admits(owner), !Task.isCancelled else { return }
-                self.pauseRouteCapture(cause)
-            }
-        }
+        return repairOwner
     }
     private func recordRecovery(_ context: RouteRecoveryContext, _ result: RouteResult) {
         let current = coordinator.currentPhoneRoute
@@ -913,6 +965,7 @@ final class IOSAudio: AudioInput, AudioOutput, LevelReporting, PlaybackRepairRep
         recoveryJob += 1
         recoveryTask?.cancel(); recoveryTask = nil
         repairRequired = false
+        pendingRecovery = nil
         graphGeneration += 1
         if let configurationObserver { NotificationCenter.default.removeObserver(configurationObserver) }
         configurationObserver = nil
@@ -993,11 +1046,25 @@ final class IOSAudio: AudioInput, AudioOutput, LevelReporting, PlaybackRepairRep
         lastVPFields = fields; recordPlayback(.voiceProcessingState, fields)
     }
     func stopPlayback() { stopPlayback(cause: .outputStop) }
+    /// Reuses the installed player/source/receipt continuity ledger. No scheduled
+    /// bytes, tap level, skipped repair position or HTTP completion proves delivery.
+    private func observePreparedProgress(_ state: PlaybackSourceProgress.State, sampleClock: Bool = true) {
+        guard let callback = preparedProgress, let continuity = playbackContinuity else { return }
+        var frames: Int?
+        if sampleClock && playbackQueue.hasStarted && !continuity.suspended && !graphRepairBarrier.inProgress {
+            let node = PlaybackClock.sourceFrame(player: player, nodeTime: player.lastRenderTime)
+            let tap = sourceSignals.renderedPosition.map { max(0,$0-continuity.renderBase) }
+            frames = [node,tap].compactMap { $0 }.max()
+        }
+        let proof = continuity.deliverySnapshot(renderedFrames:frames)
+        callback(PlaybackSourceProgress(renderedSamples:proof.samples,state:proof.known ? state : .unknown))
+    }
     func setCutInGain(_ gain: Float) {
         cutInGain = gain; player.volume = gain
         sourceSignals.setExpectedGain(Double(gain))
     }
     func pauseForAutomaticCutIn() -> Bool {
+        observePreparedProgress(.paused)
         let hadAudio = playbackActive && player.isPlaying && playbackQueue.depth > 0
         automaticCutInPaused = true
         if playbackActive {
@@ -1025,8 +1092,11 @@ final class IOSAudio: AudioInput, AudioOutput, LevelReporting, PlaybackRepairRep
             captureOrigin.setRendering(true)
         }
         recordPlayback(.cutInResume)
+        observePreparedProgress(.playing)
     }
     private func stopPlayback(cause: PlaybackStopCause) {
+        observePreparedProgress(.stopped) // BEFORE stop/flush can synthesize old buffer completions
+        preparedProgress = nil
         automaticCutInPaused = false; setCutInGain(1)
         recordPlayback(.stopPlayback, [.stopCause: Double(cause.rawValue)])
         playbackActive = false; renderDropouts.suspend()
@@ -1039,11 +1109,12 @@ final class IOSAudio: AudioInput, AudioOutput, LevelReporting, PlaybackRepairRep
         guard playbackActive, let continuity = playbackContinuity, !continuity.suspended else { return }
         player.pause()
         let nodeFrames = playbackQueue.hasStarted
-            ? player.lastRenderTime.flatMap { player.playerTime(forNodeTime: $0) }.map { Int($0.sampleTime) } : nil
+            ? PlaybackClock.sourceFrame(player: player, nodeTime: player.lastRenderTime) : nil
         let tapFrames = sourceSignals.renderedPosition.map { max(0, $0 - continuity.renderBase) }
         let frames = [nodeFrames, tapFrames].compactMap { $0 }.max()
         sourceSignals.suspend()
         let consumed = continuity.suspend(renderedFrames: frames)
+        observePreparedProgress(.paused,sampleClock:false)
         let skippedMs = sourceSignals.noteHandoffPosition(generation: pendingRecovery?.generation ?? 0,
             positionKnown: continuity.positionKnown, skippedFrames: continuity.skippedFrames)
         // Repair boundaries are not source starvation and cannot fake a refill gap.
@@ -1056,13 +1127,7 @@ final class IOSAudio: AudioInput, AudioOutput, LevelReporting, PlaybackRepairRep
     }
     private func enqueueRetainedSegment(_ segment: PlaybackContinuity.Segment, format: AVAudioFormat,
         continuity: PlaybackContinuity, owner: Int, ordinal: Int, observation: PlayerDiagnosticObservation) throws {
-        let count = segment.pcm.count / 2
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(count)) else {
-            throw ClientError("Playback allocation failed")
-        }
-        buffer.frameLength = AVAudioFrameCount(count)
-        let bytes = [UInt8](segment.pcm)
-        for i in 0..<count { buffer.floatChannelData![0][i] = Float(Int16(bitPattern: UInt16(bytes[i*2]) | UInt16(bytes[i*2+1]) << 8)) / 32768 }
+        let buffer = try PCMPlaybackBuffer.make(segment.pcm,format:format)
         let revision = continuity.revision
         let receipt = continuity.completionReceipt(for: segment)
         player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
@@ -1071,6 +1136,7 @@ final class IOSAudio: AudioInput, AudioOutput, LevelReporting, PlaybackRepairRep
             guard let self, owner == self.epoch, ordinal == self.playbackOrdinal,
                   continuity.completed(segment.token, revision: revision) else { return }
             self.sourceSignals.confirmRendered(through: continuity.position, token: ordinal)
+            self.observePreparedProgress(.playing,sampleClock:false)
             if observation.queue.played(now: ProcessInfo.processInfo.systemUptime, moreExpected: observation.moreExpected) {
                 self.recordPlayback(.starvationBegin, [.sourceFinished: 0])
             }
@@ -1116,6 +1182,7 @@ final class IOSAudio: AudioInput, AudioOutput, LevelReporting, PlaybackRepairRep
         guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(audio.sampleRate), channels: 1, interleaved: false) else { throw ClientError("Invalid playback rate") }
         playbackOrdinal += 1
         let ordinal = playbackOrdinal
+        preparedProgress = audio.sourceProgress
         let callToken = StageDiagnostics.shared.playbackCallToken
         playbackAttempt = audio.diagnosticAttempt; playbackActive = true
         let observation = PlayerDiagnosticObservation()
@@ -1144,6 +1211,8 @@ final class IOSAudio: AudioInput, AudioOutput, LevelReporting, PlaybackRepairRep
                 attempt: audio.diagnosticAttempt,
                 category: observation.completed ? .complete : (owner != epoch || Task.isCancelled ? .cancelled : .failed), callToken: callToken)
             if playbackOrdinal == ordinal {
+                observePreparedProgress(observation.completed ? .completed : .unknown,sampleClock:false)
+                preparedProgress = nil
                 playbackActive = false; playbackAttempt = nil; playbackObservation = nil
                 playbackContinuity = nil; resumeRetainedPlayback = nil
             }
@@ -1171,6 +1240,7 @@ final class IOSAudio: AudioInput, AudioOutput, LevelReporting, PlaybackRepairRep
                 .positionKnown: continuity.positionKnown ? 1 : 0,
                 .skippedUpToMs: Double(continuity.skippedFrames) / format.sampleRate * 1000,
                 .retainedPCMBytes: Double(continuity.segments.reduce(0) { $0 + $1.pcm.count })])
+            self.observePreparedProgress(.playing,sampleClock:false)
         }
         let mixed = engine.mainMixerNode.outputFormat(forBus: 0), output = engine.outputNode.inputFormat(forBus: 0)
         recordPlayback(.playbackFormat, [.sourceRate: Double(audio.sampleRate), .playerRate: format.sampleRate,
@@ -1180,7 +1250,20 @@ final class IOSAudio: AudioInput, AudioOutput, LevelReporting, PlaybackRepairRep
             .actualInterleaved: output.isInterleaved ? 1 : 0])
         if automaticCutInPaused { _ = continuity.suspend(renderedFrames: 0) }
         var carry = Data()
-        for try await chunk in audio.chunks {
+        var sourceTailError: Error?
+        var iterator = audio.chunks.makeAsyncIterator()
+        while true {
+            let chunk: Data
+            do {
+                guard let next = try await iterator.next() else { break }
+                chunk = next
+            } catch {
+                // Only source-tail failures defer reporting. Cancellation, End,
+                // Hold and graph failure keep their existing epoch/cut semantics.
+                try checkPlayback(owner)
+                sourceTailError = error
+                break
+            }
             VoiceTrace.shared.event("player.chunk", ["bytes": String(chunk.count)])
             try checkPlayback(owner)
             carry.append(chunk)
@@ -1232,6 +1315,34 @@ final class IOSAudio: AudioInput, AudioOutput, LevelReporting, PlaybackRepairRep
         try checkPlayback(owner)
         captureOrigin.setRendering(false)
         onLevel?(0)
+        if let sourceTailError { throw sourceTailError }
         observation.completed = true
+    }
+}
+
+/// Probe-only copy of render-tap samples (channel 0). Bounded; never microphone audio.
+final class ProbeRenderRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var samples: [Float] = []
+    private(set) var sampleRate: Double = 0
+    private(set) var channels: UInt32 = 0
+    private let limit: Int
+    init(seconds: Int = 90) { limit = seconds * 48000; samples.reserveCapacity(limit) }
+    func append(_ buffer: AVAudioPCMBuffer) {
+        guard let data = buffer.floatChannelData, buffer.frameLength > 0 else { return }
+        lock.lock(); defer { lock.unlock() }
+        sampleRate = buffer.format.sampleRate; channels = buffer.format.channelCount
+        let count = min(Int(buffer.frameLength), limit - samples.count)
+        if count > 0 { samples.append(contentsOf: UnsafeBufferPointer(start: data[0], count: count)) }
+    }
+    var frames: Int { lock.lock(); defer { lock.unlock() }; return samples.count }
+    func pcm16() -> Data {
+        lock.lock(); defer { lock.unlock() }
+        var out = Data(capacity: samples.count * 2)
+        for x in samples {
+            let v = x.isFinite ? Int16(max(-32768, min(32767, (x * 32768).rounded()))) : 0
+            out.append(UInt8(truncatingIfNeeded: v)); out.append(UInt8(truncatingIfNeeded: v >> 8))
+        }
+        return out
     }
 }

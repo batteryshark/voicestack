@@ -21,9 +21,9 @@ import FloatingVoiceUI
 
 let projectDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().path
 let forbidden: Set<String> = [
-    "ses_a10001fixture0000000000", // chief
-    "ses_example0020000000000000000", // lead
-    "ses_example0080000000000000000", "ses_example0030000000000000000", "ses_example0060000000000000000",
+    "ses_SYNTHETIC0022c76RThXACt6GCT", // chief
+    "ses_SYNTHETIC0019", // lead
+    "ses_SYNTHETIC0026", "ses_SYNTHETIC0021", "ses_SYNTHETIC0024",
 ]
 
 func arg(_ name: String) -> String? {

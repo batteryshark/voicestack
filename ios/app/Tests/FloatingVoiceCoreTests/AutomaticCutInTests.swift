@@ -262,6 +262,25 @@ import Testing
         #expect(rig.backend.admits == ["[voice] wait for me"] && rig.backend.prompts.isEmpty)
         #expect(outcomes(stages).last?.outcome == .posted && outcomes(stages).last?.delivery == .admitOnly)
     }
+    @Test func holdMusicIsNeverInterruptibleAndSpeechDuringHoldPostsWithoutAbort() async {
+        let rig = Rig(duration: 5, configure: { $0.bargeInAborts = true }); let stages = logging(rig)
+        rig.transcript = "wait, change the plan"; await rig.start(); defer { rig.controller.stop() }
+        rig.backend.send("session.execution.started", "ses_A")
+        #expect(await waitUntil { rig.controller.status.busy })
+        rig.controller.speaker.enqueueHold(FakeTicket("music"))
+        #expect(await waitUntil { rig.output.playing == ["music"] && rig.controller.speaker.isHolding })
+        #expect(!rig.controller.speaker.playingReply)
+        rig.input.frames(8, voiced: true)
+        #expect(rig.output.gain == 1) // no duck: hold is never beganDuringPlayback
+        rig.recognitions[0].callbacks.live("wait")
+        rig.input.frames(100, voiced: true) // past the sustained-voice fallback
+        #expect(rig.output.cutInPauses == 0 && !rig.output.cutInPaused)
+        rig.input.frames(170, voiced: false)
+        #expect(await waitUntil { rig.backend.admits.count + rig.backend.prompts.count == 1 })
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        #expect(rig.backend.interrupts.isEmpty) // the Chief's turn is never aborted by hold audio
+        #expect(outcomes(stages).last?.outcome == .posted && outcomes(stages).last?.cutInStoppedPlayback != true)
+    }
     @Test func closedOutcomePersistsAndReloadsIntoBothStores() {
         let file = URL(fileURLWithPath: tempDir()).appendingPathComponent("stages.json")
         let stages = StageDiagnostics(); stages.configure(file: file, build: 32); stages.beginCall()

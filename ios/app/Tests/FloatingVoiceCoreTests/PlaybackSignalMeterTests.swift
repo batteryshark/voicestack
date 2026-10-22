@@ -53,6 +53,24 @@ import Testing
         let result = meter.end(token: 3)
         #expect(result.sourceSilenceCount == 1 && result.dropoutCount == 0 && result.alignmentUnknown == 1)
     }
+    @Test func delayedTapFromOldRunCannotCompleteResumedHandoff() {
+        let meter = PlaybackSignalMeter(); meter.begin(token: 1, graph: 1, rate: 1000)
+        meter.source(Data(repeating: 32, count: 800)); meter.sourceFinished(); meter.start(token: 1, now: 0)
+        _ = meter.render(rms: 0.1, frames: 10, renderRate: 1000, sourceFrame: 0, graph: 1, now: 0)
+        let oldRevision = meter.renderRevision
+        meter.beginHandoff(generation: 4, now: 0.01); meter.suspend()
+        meter.resume(graph: 1, base: 10); meter.start(token: 1, now: 0.1)
+        // A queued tap can reach the actor after a same-graph pause/resume.
+        #expect(meter.render(rms: 0.1, frames: 10, renderRate: 1000, sourceFrame: 10,
+            graph: 1, now: 0.01, revision: oldRevision).isEmpty)
+        #expect(meter.renderedPosition == 10)
+        let handoffs = meter.render(rms: 0.1, frames: 10, renderRate: 1000, sourceFrame: 0,
+            graph: 1, now: 0.135, revision: meter.renderRevision)
+        #expect(handoffs.count == 1 && handoffs.first?.generation == 4)
+        #expect(abs((handoffs.first?.gapMs ?? 0) - 125) < 0.001)
+        #expect(meter.render(rms: 0.1, frames: 10, renderRate: 1000, sourceFrame: 10,
+            graph: 1, now: 0.145, revision: meter.renderRevision).isEmpty)
+    }
     @Test func rapidSwitchesKeepEachGenerationAndHandoffOwnershipIsCaptured() {
         let meter = PlaybackSignalMeter(), attempt = UUID()
         meter.begin(token: 7, graph: 2, rate: 1000, attempt: attempt, callToken: 12)

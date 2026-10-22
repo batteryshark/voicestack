@@ -7,8 +7,9 @@ import http from 'node:http';
 import { once } from 'node:events';
 import { Credentials, createBridge } from './server.mjs';
 import { provision, remove, fingerprints } from './test-identity.mjs';
+import { unpairedDesktop } from './fixtures/synthetic-desktop.mjs';
 
-test('offline scoped identity append/use/expiry/remove preserves all original fields and records', async () => {
+test('offline scoped identity append/use/expiry/remove preserves all original fields and records', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fv-owned-identity-'));
   const file = path.join(dir, 'store.json'), request = path.join(dir, 'request.json');
   const auth = path.join(dir, 'auth.json'), ledger = path.join(dir, 'ledger.json');
@@ -32,7 +33,7 @@ test('offline scoped identity append/use/expiry/remove preserves all original fi
       res.end('{"data":[]}');
     });
     fake.listen(0, '127.0.0.1'); await once(fake, 'listening');
-    bridge = createBridge({ credentials, discover: () => fake.address().port, chief: () => 'ses_phone' });
+    bridge = createBridge({ credentials, ...unpairedDesktop(t, fake), chief: () => 'ses_phone' });
     bridge.listen(0, '127.0.0.1'); await once(bridge, 'listening');
     const call = (route, body, generation) => fetch(`http://127.0.0.1:${bridge.address().port}/floating-voice${route}`, {
       method: body ? 'POST' : 'GET', headers: { Authorization: 'Bearer ' + secret, ...(generation ? { 'X-FV-Generation': generation } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });

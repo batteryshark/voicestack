@@ -4,6 +4,7 @@ public struct VoiceLogTurn: Identifiable, Equatable, Sendable {
     public enum Role: String, Sendable { case you, chief, system }
     public var id: String
     public var role: Role
+    /// Display prose (including explicitly received final text), never audio evidence.
     public var spoken: String
     public var details: String
     public var pending = false
@@ -19,7 +20,7 @@ public struct VoiceLogTurn: Identifiable, Equatable, Sendable {
 
 /// Latest on-phone conversation + live words. No extra history fetches, tools or blank bubbles.
 public struct ConversationVoiceLog {
-    private struct Source { let id: String; let role: VoiceLogTurn.Role; let text: String; var hasCanvas = false; var sender: MessageSender? = nil }
+    private struct Source { let id: String; let role: VoiceLogTurn.Role; let text: String; var hasCanvas = false; var sender: MessageSender? = nil; var receivedFinal = false }
     private var sources: [Source] = []
     private var captions: [String: ChiefCaptionState] = [:]
     private var voiceRunning = false, voiceMuted = false
@@ -58,6 +59,12 @@ public struct ConversationVoiceLog {
         for source in sources {
             if source.role == .system { append(VoiceLogTurn(id: source.id, role: .system, spoken: source.text, details: "", sender: source.sender)) }
             else if source.role == .you { append(VoiceLogTurn(id: source.id, role: .you, spoken: source.text, details: "", sender: source.sender)) }
+            else if source.receivedFinal {
+                // This separate display event is NOT sentence-start/heard progression.
+                // No source record/history fabrication or playback callback is involved.
+                let content = ChiefReplyContent(source.text)
+                append(VoiceLogTurn(id:source.id,role:.chief,spoken:content.spoken,details:content.details))
+            }
             else if let caption = captions[source.id] {
                 let rich = (!voiceRunning || voiceMuted) && !source.text.isEmpty && richSources[source.id] == source.text
                 append(VoiceLogTurn(id: source.id, role: .chief, spoken: caption.spoken, details: caption.details, panelMessageIDs: source.hasCanvas ? [source.id] : [], markdownSources: rich ? [source.text] : []))
@@ -131,6 +138,12 @@ public struct ConversationVoiceLog {
             liveWords = text; liveAcknowledged = true
             if liveIsRecorded { liveTurn = false; liveWords = "" }
         case .discarded: liveTurn = false; liveWords = ""
+        case .chiefFinalReceived(let id, let text):
+            guard !sources.contains(where:{ $0.id == id && $0.receivedFinal }) else { return }
+            latestSpeechID = id
+            let source = Source(id:id,role:.chief,text:text,receivedFinal:true)
+            if let index = sources.firstIndex(where:{ $0.id == id }) { sources[index] = source }
+            else { sources.append(source) }
         case .chiefQueued(let label, let text), .chiefStarted(let label, let text), .chiefEnded(let label, let text, _):
             let id = label.lastIndex(of: ":").map { String(label[..<$0]) } ?? label
             latestSpeechID = id

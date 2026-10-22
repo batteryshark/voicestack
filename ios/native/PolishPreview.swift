@@ -41,7 +41,7 @@ struct PolishPreview: View {
             case "settings": SettingsView(model: model)
             case "notifications", "notifications-denied": NavigationStack { Form { ReachOutSettingsView() }.navigationTitle("\(AgentPresentation.name) reach-out") }
             case "diagnostics": NavigationStack { ScrollView { Text(StageDiagnostics.shared.export()).font(.caption.monospaced()).padding() }.navigationTitle("Diagnostics") }
-            case "install-review": NavigationStack { PrivateLinkView(url: URL(string: "itms-services://?action=download-manifest&url=https%3A%2F%2Fmac.ts.net%2Fbuilds%2F20%2Fmanifest.plist")!) }
+            case "install-review": NavigationStack { PrivateLinkView(url: URL(string: "itms-services://?action=download-manifest&url=https%3A%2F%2Fmac.example-tailnet.invalid%2Fbuilds%2F20%2Fmanifest.plist")!) }
             default: ConversationView(model: model)
             }
             }
@@ -140,7 +140,6 @@ struct PolishPreview: View {
         if Self.mode == "speech-warming" { status.warmingSpeech = true; model.status = status; model.surface.update(status: status, owner: owner) }
         if Self.mode == "audio-switching" { model.surface.updateCapture(.repairing, owner: owner) }
         if Self.mode == "reconnect" { model.surface.update(records: [raw], connection: "reconnecting", active: false) }
-        if Self.mode == "notifications-denied" { PushCoordinator.shared.polishDenied() }
         if Self.mode.hasPrefix("caption-") || ["chief-speaker", "chief-phone"].contains(Self.mode) {
             let first = "The update is ready for you to review."
             let second = "Nothing will install until you confirm it."

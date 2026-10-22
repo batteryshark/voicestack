@@ -62,7 +62,7 @@ struct SenderAttributionTests {
     }
 
     @Test func historyAndInboxAdaptersAgree() throws {
-        // Synthetic records preserving the history and inbox adapter schemas.
+        // Synthetic history and inbox records share the same schema.
         let history: [String: Any] = ["id": "msg_history", "time": ["created": 1792190155332], "type": "user",
                                       "text": "From the Voicestack iPhone lead: Build ready."]
         let inbox: [String: Any] = ["type": "user", "delivery": "steer", "payload": ["text": history["text"]!]]
@@ -71,7 +71,7 @@ struct SenderAttributionTests {
         #expect(InboundCaption(["type": "assistant", "text": "From the fake lead: no"]) == nil)
     }
 
-    @Test func syntheticEventAndHistoryProtocol() throws {
+    @Test func syntheticEventAndHistoryRecord() throws {
         let file = try #require(Bundle.module.url(forResource: "observed-sender-records", withExtension: "json", subdirectory: "Fixtures"))
         let fixture = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
         let historyRecord = try #require(fixture["history"] as? [String: Any])
@@ -85,7 +85,7 @@ struct SenderAttributionTests {
         let item = try #require(event.data["item"] as? [String: Any])
         let caption = try #require(InboundCaption(item))
         #expect(caption.id == nil) // Live identity lives at data.inboxID, not item.id.
-        #expect(event.data["inboxID"] as? String == "msg_syntheticObserved")
+        #expect(event.data["inboxID"] as? String == "msg_SYNTHETIC0002")
         #expect(SenderAttribution.classify(text: caption.text, metadata: caption.metadata).label == "Message")
     }
 }

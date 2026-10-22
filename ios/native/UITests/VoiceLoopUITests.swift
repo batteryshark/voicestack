@@ -609,7 +609,7 @@ final class DeviceHomeUITests: XCTestCase {
         continueAfterFailure = false // Any failed identity/readiness assertion stops BEFORE the tap.
         historyOnly = true // Cleanup may restore Chief, never start/end a call.
         let app = XCUIApplication(); app.launchArguments = ["-FVCanvas25Probe"]; app.launch()
-        let session = "ses_example0000000000000000000", message = "msg_synthetic0001"
+        let session = "ses_SYNTHETIC0017", message = "msg_SYNTHETIC0003"
         let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             app.staticTexts["canvas.probe.ready"].exists || app.staticTexts["canvas.probe.error"].exists
         }, object: nil)
@@ -747,8 +747,8 @@ final class DeviceHomeUITests: XCTestCase {
             mark("run\(run)-main-build" + expectedBuild)
             picker()
             let search = app.searchFields.firstMatch
-            search.tap(); search.typeText("ses_example0000000000000000000")
-            let owned = app.buttons["picker.ses_example0000000000000000000"]
+            search.tap(); search.typeText("ses_SYNTHETIC0017")
+            let owned = app.buttons["picker.ses_SYNTHETIC0017"]
             XCTAssertTrue(owned.waitForExistence(timeout: 5)); owned.tap()
             XCTAssertTrue(app.navigationBars["Sessions & settings"].waitForExistence(timeout: 5))
             app.buttons["Done"].tap()
@@ -873,9 +873,9 @@ final class DeviceHomeUITests: XCTestCase {
         try m4Authorization()
         let env = ProcessInfo.processInfo.environment
         try XCTSkipUnless(expectedBuild == "23" && env["FV_D1_REAL_HISTORY"] == "OWNED-REAL-NO-CHOICE", "Dedicated gated real-content driver only")
-        let session = "ses_example0000000000000000000"
-        let message = "msg_synthetic0002"
-        let canvasMessage = "msg_synthetic0001"
+        let session = "ses_SYNTHETIC0017"
+        let message = "msg_SYNTHETIC0004"
+        let canvasMessage = "msg_SYNTHETIC0003"
         m4Home()
         XCTAssertEqual(app.buttons["voice.startStop"].label, "Start voice", "No active call may be touched by this lane")
         picker()
@@ -1153,8 +1153,8 @@ final class DeviceVoiceTurnUITests: XCTestCase {
         waitForExpectations(timeout: 15)
         picker()
         let search = app.searchFields.firstMatch
-        search.tap(); search.typeText("ses_example0000000000000000000")
-        let owned = app.buttons["picker.ses_example0000000000000000000"]
+        search.tap(); search.typeText("ses_SYNTHETIC0017")
+        let owned = app.buttons["picker.ses_SYNTHETIC0017"]
         XCTAssertTrue(owned.waitForExistence(timeout: 5)); owned.tap()
         XCTAssertTrue(app.navigationBars["Sessions & settings"].waitForExistence(timeout: 5))
         app.buttons["Done"].tap()

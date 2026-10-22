@@ -45,6 +45,12 @@ ASR and TTS wrappers for a separately configured loopback deployment.
 
 Setup order:
 
+Install the bridge's pinned JavaScript dependency first from `ios/bridge` with
+`npm ci --ignore-scripts --no-audit --no-fund`. Keep `node_modules` out of Git.
+The experimental isolated SDK runtime has a separate dependency graph under
+`bridge/harness-runtime`; it is not required for ordinary Chief calls and must
+not be enabled simply to run the bridge.
+
 0. Follow the [renderer recipe](bridge/renderer/README.md) to build and verify
    resources in a **fresh ignored direct child** of owner-owned, non-symlink
    `ios/output`. Keep its explicit absolute `FV_CANVAS_RESOURCES` in the bridge
@@ -89,6 +95,11 @@ Setup order:
 
 ## Agent-initiated alerts and calls
 
+**Current behavior: calls only. Messages and notifications use Nod.** Historical
+alert records remain readable, but `send` refuses `need` and `ready-to-try` kinds.
+Use `node bridge/reachout.mjs --help` for the current interface. Legacy alert
+records do not authorize sending notifications through Voicestack.
+
 Reach-out is an explicit tool action by the configured caller, separate from
 automatic assistant-prose playback during active voice. Give that agent authorized
 shell/tool access to `bridge/reachout.mjs`; the repository doesn't install an agent
@@ -104,29 +115,30 @@ in the phone UI doesn't acquire caller authority. An explicit target suffices fo
 ordinary conversation; this reach-out path needs the caller pointer too.
 
 The sender's `send` command takes `--kind`, `--reason`, `--session`, a unique
-`--id`, `--title` and `--body`. Allowed intents are `need` (decision/hands/stuck),
-`ready-to-try` (install/build), and `urgent-call` (decision/goal-risk). Review
+`--id`, `--title` and `--body`. The only allowed kind is `urgent-call`, with
+reason `decision` or `goal-risk`. Review
 `bridge/reachout.mjs` before granting tool access. Its `--dry-run` validates only
 the schema; it doesn't evaluate live delivery policy. Use `status --id ID` after
 an uncertain send; don't retry blindly or substitute a new ID.
 
-Push delivery requires `FV_PUSH_ENABLED=1`, APNs credentials, enrolled device
-tokens and native notification permission. Urgent calls use APNs VoIP pushes,
+Call delivery requires `FV_PUSH_ENABLED=1`, APNs credentials and enrolled device
+tokens. Urgent calls use APNs VoIP pushes,
 PushKit and CallKit; answering resolves the origin and starts that session's
 voice loop. The request body supplies reach-out context, not text to synthesize.
-Alerts use generic lock-screen text and retrieve context after the user opens them.
+Messages and alerts must instead be sent through the separately configured Nod service.
 
 Calls need fresh synced settings, calls enabled, a valid time zone, no outstanding
-call and a quiet-hours window that covers ringing. Defaults are 22:00–09:00 quiet
-hours, 15-minute call spacing, three calls/day and six notifications/hour.
-Ineligible calls can become ordinary alerts, subject to token and notification
-limits; quiet hours restrict calls, not every alert. The native app rechecks call
-policy, and CallKit can reject a call under Do Not Disturb or other OS restrictions.
-There is no Focus bypass or Critical Alerts entitlement. The development override
-only relaxes spacing/daily/notification caps; it doesn't bypass quiet hours or
-outstanding-call safety. Locked/background delivery remains unverified for this
-combined source copy. [Development notes](../docs/DEVELOPMENT.md) cover native
-cut-in and route limits.
+call and a quiet-hours window that covers ringing. Default quiet hours are
+22:00–09:00. Ordinary calls have no daily or spacing caps and no fallback alert.
+The native app rechecks policy; CallKit may reject a call under Do Not Disturb or
+other OS restrictions. There is no Focus bypass or Critical Alerts entitlement.
+The sender verifies speech readiness before ringing and reports an answer or
+decline without automatically retrying. Its optional local speech controller is
+expected at `~/.local/share/voicestack/speech/scripts/speechctl` with the matching
+loopback service layout; an unproven or missing speech setup refuses the call.
+No speech service is started or stopped by this publication. Configure and review
+that integration separately. [Development notes](../docs/DEVELOPMENT.md) cover
+native cut-in and route limits. This source publication is not live-device proof.
 
 ## Optional service/proxy design
 

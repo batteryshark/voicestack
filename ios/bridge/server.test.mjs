@@ -8,6 +8,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { once } from 'node:events';
 import { Credentials, SessionEvents, createBridge } from './server.mjs';
+import { OpenChamberClient } from './oc-client.mjs';
 
 let fake, bridge, dir, store, credential, base, generation, chief = 'ses_testA';
 const mutations = [], seen = [];
@@ -104,7 +105,7 @@ before(async () => {
     socket.on('data', b => socket.write(b)); // Byte tunnel fake, not a speech service.
   });
   await listen(fake);
-  bridge = createBridge({ credentials: store, discover: () => fake.address().port, chief: () => chief, ttsPort: fake.address().port, asrPort: fake.address().port, diagnostic: entry => stages.push(entry) });
+  bridge = createBridge({ credentials: store, ocClient: new OpenChamberClient({ file: path.join(dir, 'absent-client.json') }), discover: () => fake.address().port, chief: () => chief, ttsPort: fake.address().port, asrPort: fake.address().port, diagnostic: entry => stages.push(entry) });
   await listen(bridge); base = 'http://127.0.0.1:' + bridge.address().port;
 });
 after(async () => { bridge.shutdown(); await close(fake); fs.rmSync(dir, { recursive: true }); });
@@ -311,7 +312,7 @@ test('reselection rotates generation even for the same target', async () => {
   assert.equal((await call('/floating-voice/v1/sessions/ses_testA/messages')).status, 200);
 });
 test('20 aborted discovery calls plus history and selection validation close every upstream', async () => {
-  const other = createBridge({ credentials: store, discover: () => fake.address().port, chief: () => chief, maxUpstreams: 3, jsonDeadlineMs: 500 });
+  const other = createBridge({ credentials: store, ocClient: new OpenChamberClient({ file: path.join(dir, 'absent-client.json') }), discover: () => fake.address().port, chief: () => chief, maxUpstreams: 3, jsonDeadlineMs: 500 });
   await listen(other);
   try {
     const stages = Array.from({ length: 20 }, () => ['/api/system/info', '/floating-voice/v1/health']);
@@ -333,7 +334,7 @@ test('20 aborted discovery calls plus history and selection validation close eve
   } finally { hangingPath = undefined; other.shutdown(); }
 });
 test('slow trickle cannot extend elapsed deadline and aggregate work admission is bounded', async () => {
-  const other = createBridge({ credentials: store, discover: () => fake.address().port, chief: () => chief, maxUpstreams: 3, jsonDeadlineMs: 120 });
+  const other = createBridge({ credentials: store, ocClient: new OpenChamberClient({ file: path.join(dir, 'absent-client.json') }), discover: () => fake.address().port, chief: () => chief, maxUpstreams: 3, jsonDeadlineMs: 120 });
   await listen(other);
   hangingPath = '/api/system/info'; trickle = true;
   try {

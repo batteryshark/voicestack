@@ -18,6 +18,8 @@ public struct RecognitionCallbacks {
 public protocol RecognitionSession: AnyObject {
     var hasBufferedAudio: Bool { get }
     var isWarming: Bool { get }
+    /// Sticky positive cold-start eligibility, available synchronously even after words/completion.
+    var hasColdStartBudget: Bool { get }
     func finalBudget(ordinary: TimeInterval) async -> TimeInterval
     func allowColdStart()
     func setCold(_ cold: Bool)
@@ -26,17 +28,23 @@ public protocol RecognitionSession: AnyObject {
     func write(_ pcm: Data)
     @MainActor func writeBuffered(_ pcm: Data) async throws
     func end()
+    /// After end(): pending PCM and the end frame have completed transport writes.
+    /// Not a server acknowledgement or a final transcript. Async transports must implement this.
+    @MainActor func waitForEndTransmission() async throws -> ContinuousClock.Instant
     func cancel()
 }
 
 public extension RecognitionSession {
     var hasBufferedAudio: Bool { false }
     var isWarming: Bool { false }
+    var hasColdStartBudget: Bool { false }
     func finalBudget(ordinary: TimeInterval) async -> TimeInterval { ordinary }
     func allowColdStart() {}
     func setCold(_ cold: Bool) { if cold { allowColdStart() } }
     func prepareContinuation() { setCold(false) }
     @MainActor func writeBuffered(_ pcm: Data) async throws { try Task.checkCancellation(); write(pcm) }
+    /// Only for synchronous recognizers, including existing in-memory fixtures.
+    @MainActor func waitForEndTransmission() async throws -> ContinuousClock.Instant { try Task.checkCancellation(); return .now }
 }
 
 public struct TurnCallbacks {
@@ -57,6 +65,8 @@ public struct TurnCallbacks {
     public var ended: (Double, Double) -> Void = { _, _ in }
     public var error: (Error) -> Void = { _ in }
     public var review: (String) -> Void = { _ in }
+    /// Owned soft-response feedback, never a transcript or assistant-thinking state.
+    public var transcribing: (Bool) -> Void = { _ in }
     /// The words stopped (no voice, or no new live words) for `silenceCueMs`: the wait before sending begins, with this
     /// many ms of it already gone; nil when it is called off (speech resumed).
     public var silence: (Double?) -> Void = { _ in }
@@ -120,10 +130,16 @@ public final class TurnTaker {
     private var utteranceRMS: [Double] = []
     private var waiting = false, sustained = false, closed = false
     private var recognition: RecognitionSession?
-    /// After input_audio.end, a final transcript that does not arrive within this many seconds is given up on, so
-    /// listening never stalls (the server's own timeout is 120 s).
+    /// Ordinary response soft limit; one fixed equal grace follows, without progress resets.
     public var finalTimeout: TimeInterval = 8
+    var finalSendTimeout: TimeInterval = 8
+    var warmWholeTimeout: TimeInterval = 120, coldWholeTimeout: TimeInterval = 180
     private var finalWatch: Task<Void, Never>?
+    private var finalLimit: Task<Void, Never>?
+    private var finalDeadline: ContinuousClock.Instant?
+    private var finalDeadlineMessage = ""
+    private var segmentStartedAt = ContinuousClock.now
+    private var showingTranscribing = false
     private var epoch = 0
     private var observedOutcome = TurnOutcomeObserver()
     private var recognized = ""
@@ -196,6 +212,7 @@ public final class TurnTaker {
             let session = makeSegment(generation: generation, buffered: false)
             recognition = session
             recognized = ""
+            segmentStartedAt = .now
             session.start()
             for pcm in preroll { session.write(pcm) }
             preroll = []; recent = []; frames = 0; silent = 0
@@ -257,10 +274,11 @@ public final class TurnTaker {
             } },
             done: { [weak self] text in
                 guard let self, self.epoch == generation, self.recognition === session else { return }
+                if self.expireFinalIfNeeded() { return }
                 if self.continuation != nil && !self.closed { self.continueSegment(text); return }
                 let joined = Self.joined(self.segmentPrefix, text)
                 let deliverFinal = self.observedOutcome.final(joined, !self.closed && !self.callbacks.muted())
-                self.finalWatch?.cancel(); self.finalWatch = nil
+                self.cancelFinalWatch()
                 self.recognition = nil; self.waiting = false; self.recent = []; self.silent = 0
                 self.preroll = []; self.buffer = Data(); self.clearSegments()
                 if !self.closed && !joined.isEmpty && !self.callbacks.muted() && deliverFinal { self.callbacks.transcript(joined) }
@@ -295,13 +313,14 @@ public final class TurnTaker {
 
     private func continueSegment(_ text: String) {
         guard let next = continuation else { return }
-        finalWatch?.cancel(); finalWatch = nil
+        cancelFinalWatch()
         segmentPrefix = Self.joined(segmentPrefix, text); recognized = segmentPrefix
         liveCount = segmentPrefix.count; lastGrowthFrame = frames; resumeFrame = frames
         segmentHasLiveWords = false
         continuation = nil; epoch += 1; recognition = next
         let ending = continuationEnd != nil
         continuationEnd = nil; waiting = ending
+        segmentStartedAt = .now
         next.start()
         if !segmentPrefix.isEmpty { callbacks.live(segmentPrefix) }
         if ending && recognition === next { endRecognition() }
@@ -343,21 +362,77 @@ public final class TurnTaker {
         endUtterance(reason: reason)
     }
 
-    /// Send input_audio.end and watch for the final transcript.
+    private func cancelFinalWatch() {
+        finalWatch?.cancel(); finalWatch = nil
+        finalLimit?.cancel(); finalLimit = nil
+        finalDeadline = nil
+        if showingTranscribing { showingTranscribing = false; callbacks.transcribing(false) }
+    }
+
+    private func wholeDeadline(for session: RecognitionSession) -> ContinuousClock.Instant {
+        segmentStartedAt + .seconds(session.hasColdStartBudget ? coldWholeTimeout : warmWholeTimeout)
+    }
+
+    @discardableResult private func expireFinalIfNeeded() -> Bool {
+        // Authoritative early normal closure can precede logical end and its final watchdog.
+        // Check synchronously, before any completion can post or activate a standby socket.
+        if let recognition, ContinuousClock.now >= wholeDeadline(for: recognition) {
+            discontinuity(ClientError("Recognition whole-segment deadline exceeded; partial retained for review. Listening resumes after a fresh speech gap."), reason: .finalTimeout)
+            return true
+        }
+        guard let deadline = finalDeadline, ContinuousClock.now >= deadline else { return false }
+        discontinuity(ClientError(finalDeadlineMessage), reason: .finalTimeout)
+        return true
+    }
+
+    /// Independent watchdog: never joins an uncooperative health probe or transport await.
+    private func limitFinal(_ r: RecognitionSession, until deadline: ContinuousClock.Instant, message: String) {
+        finalLimit?.cancel()
+        finalDeadline = deadline; finalDeadlineMessage = message
+        finalLimit = Task { @MainActor [weak self, weak r] in
+            try? await Task.sleep(until: deadline, clock: .continuous)
+            guard !Task.isCancelled, let self, let r, self.recognition === r else { return }
+            self.discontinuity(ClientError(message), reason: .finalTimeout)
+        }
+    }
+
+    /// Bound health/drain/end transmission separately from final response, and never extend the whole session.
     private func endRecognition() {
         guard let r = recognition else { return }
         r.end()
         guard recognition === r else { return }
         let ordinary = finalTimeout
-        let endedAt = Date()
-        finalWatch?.cancel()
+        let endedAt = ContinuousClock.now
+        let sendTimeout = finalSendTimeout
+        cancelFinalWatch()
+        let sendMessage = "Recognition end transmission timed out; partial retained for review. Listening resumes after a fresh speech gap."
+        // Even a health/budget computation that never returns cannot disable retirement.
+        limitFinal(r, until: min(endedAt + .seconds(sendTimeout), wholeDeadline(for: r)), message: sendMessage)
         finalWatch = Task { @MainActor [weak self, weak r] in
             guard let r else { return }
             let seconds = await r.finalBudget(ordinary: ordinary)
-            let remaining = max(0, seconds - Date().timeIntervalSince(endedAt))
-            try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
-            guard !Task.isCancelled, let self, self.recognition === r else { return }
-            self.discontinuity(ClientError("No final transcript within \(Int(seconds)) s; partial retained for review. Listening resumes after a fresh speech gap."), reason: .finalTimeout)
+            guard !Task.isCancelled, self?.recognition === r else { return }
+            if self?.expireFinalIfNeeded() == true { return }
+            let cold = seconds != ordinary
+            guard let wholeEnd = self?.wholeDeadline(for: r) else { return }
+            self?.limitFinal(r, until: min(endedAt + .seconds(cold ? seconds : sendTimeout), wholeEnd), message: sendMessage)
+            do {
+                let transmittedAt = try await r.waitForEndTransmission()
+                guard !Task.isCancelled, self?.recognition === r else { return }
+                if self?.expireFinalIfNeeded() == true { return }
+                let hard = cold ? seconds : ordinary * 2
+                self?.limitFinal(r, until: min(transmittedAt + .seconds(hard), wholeEnd),
+                    message: "No final transcript within \(Int(hard)) s; partial retained for review. Listening resumes after a fresh speech gap.")
+                if !cold {
+                    try await Task.sleep(until: transmittedAt + .seconds(ordinary), clock: .continuous)
+                    guard !Task.isCancelled, let self, self.recognition === r, self.continuation == nil else { return }
+                    if self.expireFinalIfNeeded() { return }
+                    self.showingTranscribing = true; self.callbacks.transcribing(true)
+                }
+            } catch {
+                guard !Task.isCancelled, let self, self.recognition === r else { return }
+                self.discontinuity(error)
+            }
         }
     }
 
@@ -368,7 +443,7 @@ public final class TurnTaker {
         observedOutcome.failed()
         recognition = nil; waiting = false; recent = []; silent = 0
         preroll = []; buffer = Data()
-        finalWatch?.cancel(); finalWatch = nil
+        cancelFinalWatch()
         awaitSpeechGap = true; gapFrames = 0; cueActive = false
         if noisyFlag { noisyFlag = false; callbacks.noisy(false) }
         callbacks.silence(nil)
@@ -398,7 +473,7 @@ public final class TurnTaker {
         epoch += 1
         clearSegments()
         awaitSpeechGap = false; gapFrames = 0
-        finalWatch?.cancel(); finalWatch = nil
+        cancelFinalWatch()
         let r = recognition
         recognition = nil; waiting = false; recent = []; silent = 0; frames = 0; buffer = Data(); preroll = []
         if r != nil { observedOutcome.cancelled() }
@@ -414,7 +489,7 @@ public final class TurnTaker {
         epoch += 1
         if segmentRollovers > 0 && !recognized.isEmpty { callbacks.review(recognized) }
         clearSegments()
-        finalWatch?.cancel(); finalWatch = nil
+        cancelFinalWatch()
         closed = true
         if recognition != nil { recordEnd(.stop); observedOutcome.cancelled() }
         recognition?.cancel(); recognition = nil
@@ -437,6 +512,9 @@ public final class WebSocketRecognition: NSObject, RecognitionSession, URLSessio
     private var timer: DispatchWorkItem?
     private var totalTimeout: TimeInterval = 120
     private var sendBudget = PCMSendBudget()
+    private var pendingWrites = 0, endSent = false
+    private let endTransmission = RecognitionEndTransmission()
+    public var hasColdStartBudget: Bool { totalTimeout == 180 }
 
     public func allowColdStart() { totalTimeout = 180 } // 90 s input plus a full 60 s cold final, with margin
     public func setCold(_ cold: Bool) { totalTimeout = cold ? 180 : 120 }
@@ -512,10 +590,13 @@ public final class WebSocketRecognition: NSObject, RecognitionSession, URLSessio
         guard sendBudget.reserve(pcm.count) else {
             fail(ClientError("Recognition send backlog; partial retained for review.")); return
         }
+        pendingWrites += 1
         task?.send(.data(pcm)) { [weak self] error in
             DispatchQueue.main.async {
                 self?.sendBudget.release(pcm.count)
+                self?.pendingWrites -= 1
                 if let error { self?.fail(error) }
+                else { self?.sendEndIfReady() }
             }
         }
     }
@@ -527,12 +608,14 @@ public final class WebSocketRecognition: NSObject, RecognitionSession, URLSessio
             let error = ClientError("Recognition send backlog; partial retained for review.")
             fail(error); throw error
         }
+        pendingWrites += 1
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             task.send(.data(pcm)) { [weak self] error in
                 DispatchQueue.main.async {
                     self?.sendBudget.release(pcm.count)
+                    self?.pendingWrites -= 1
                     if let error { self?.fail(error); continuation.resume(throwing: error) }
-                    else { continuation.resume() }
+                    else { self?.sendEndIfReady(); continuation.resume() }
                 }
             }
         }
@@ -541,9 +624,24 @@ public final class WebSocketRecognition: NSObject, RecognitionSession, URLSessio
     public func end() {
         guard !finished, !ended else { return }
         ended = true
-        task?.send(.string("{\"type\":\"input_audio.end\"}")) { [weak self] error in
-            if let error { DispatchQueue.main.async { self?.fail(error) } }
+        sendEndIfReady()
+    }
+
+    private func sendEndIfReady() {
+        guard ended, !finished, !endSent, pendingWrites == 0, let task else { return }
+        endSent = true
+        task.send(.string("{\"type\":\"input_audio.end\"}")) { [weak self] error in
+            let completedAt = ContinuousClock.now
+            DispatchQueue.main.async {
+                guard let self, !self.finished else { return }
+                if let error { self.endTransmission.resolve(.failure(error)); self.fail(error) }
+                else { self.endTransmission.resolve(.success(completedAt)) }
+            }
         }
+    }
+
+    @MainActor public func waitForEndTransmission() async throws -> ContinuousClock.Instant {
+        try await endTransmission.value()
     }
 
     private func fail(_ error: Error) {
@@ -565,6 +663,7 @@ public final class WebSocketRecognition: NSObject, RecognitionSession, URLSessio
     private func finish() {
         guard !finished else { return }
         finished = true
+        endTransmission.resolve(.failure(CancellationError()))
         timer?.cancel()
         task?.cancel(with: .normalClosure, reason: nil)
         session?.invalidateAndCancel()

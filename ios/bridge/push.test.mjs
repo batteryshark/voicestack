@@ -6,13 +6,14 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import http2 from 'node:http2';
-import { CONFIG, isQuiet, callPolicy, sendSchema, settingsSchema, enrollmentSchema, manifestAllowed } from './reachout-policy.mjs';
+import { CONFIG, isQuiet, callPolicy, sendSchema, settingsSchema, enrollmentSchema } from './reachout-policy.mjs';
 import { PushStore } from './push-store.mjs';
 import { PushService } from './push-service.mjs';
 import { startSender } from './push-socket.mjs';
 import { main, parseArgs, socketRequest } from './reachout.mjs';
 import { jwt, createAPNs } from './apns.mjs';
 import { Credentials, createBridge } from './server.mjs';
+import { unpairedDesktop } from './fixtures/synthetic-desktop.mjs';
 import { phoneProjection } from './rich-content.mjs';
 
 const settings = { callsEnabled: true, quietHoursEnabled: true, quietStart: '22:00', quietEnd: '09:00', timeZone: 'America/New_York', policyVersion: 1, revision: 1 };
@@ -58,37 +59,9 @@ test('schemas reject missing/unknown fields, classification mismatch, milestone 
     { ...intent(), session: '../x' }, { ...intent(), expiresIn: 301 }, { ...intent(), url: 'https://evil.invalid/' }]) assert.throws(() => sendSchema(value));
   for (const value of [{ ...settings, revision: 0 }, { ...settings, quietStart: '24:00' }, { ...settings, timeZone: 'bad' }, { ...settings, policyVersion: 99 }]) assert.throws(() => settingsSchema(value));
   for (const value of [{ ...enrollment, voipToken: '' }, { ...enrollment, environment: 'dev' }, { ...enrollment, bearer: 'no' }, { revision: 1 }]) assert.throws(() => enrollmentSchema(value));
-  const inner = 'https://test.ts.net/build/manifest.plist', url = 'itms-services://?action=download-manifest&url=' + encodeURIComponent(inner);
-  assert.equal(manifestAllowed(url), false);
-  assert.equal(manifestAllowed(url, { ...CONFIG, approvedManifests: [inner] }), true);
-  for (const bad of [url + '&url=x', url + '#x', url.replace('https', 'http')]) assert.equal(manifestAllowed(bad, { ...CONFIG, approvedManifests: [inner] }), false);
-});
-const installWrapper = raw => 'itms-services://?action=download-manifest&url=' + encodeURIComponent(raw);
-test('review: ready-to-try keeps its structured install URL, never its prose link', async t => {
-  const f = fixture(t, { ...CONFIG, deploymentSuffix: '.demo.ts.net' }), url = installWrapper('https://node.demo.ts.net/build/manifest.plist');
-  await f.service.send({ ...intent('review-install', 'ready-to-try', 'build'), url });
-  assert.equal(f.service.lookup(f.device, 'review-install').url, url);
-  assert.ok(!phoneProjection('[Install](' + url + ')').includes('itms-services:'));
-});
-// Pure mirrored cases also execute independently in install-policy.test.mjs.
-const installCases = JSON.parse(fs.readFileSync(new URL('../shared/install-policy-fixtures.json', import.meta.url)));
-for (const row of installCases) test('manifest mirrored: ' + row.name, () => {
-  const config = { ...CONFIG, deploymentSuffix: row.deploymentSuffix, approvedManifests: row.approvedManifests };
-  assert.equal(manifestAllowed(row.url, config), row.expected);
-  const value = { ...intent('install-case', 'ready-to-try', 'install'), url: row.url };
-  if (row.expected) assert.doesNotThrow(() => sendSchema(value, config));
-  else assert.throws(() => sendSchema(value, config));
-});
-test('manifest wrapper rejects plain HTTPS, other schemes/actions, userinfo, paths and duplicate fields', () => {
-  const raw = 'https://mac.ts.net:9443/any/path', good = installWrapper(raw);
-  for (const bad of [raw, good.replace('itms-services:', 'https:'), good.replace('download-manifest', 'other'),
-    good.replace('://?', '://user@?'), good.replace('://?', ':///path?'), good + '&action=download-manifest',
-    good + '&url=' + encodeURIComponent(raw), good + '#', good.replace('itms-services:', 'other:'), good.replace('itms-services:', 'ITMS-SERVICES:')]) {
-    assert.equal(manifestAllowed(bad), false, bad);
-  }
-  assert.equal(manifestAllowed(good, { ...CONFIG, approvedManifests: [raw] }), true);
-  assert.equal(manifestAllowed(good, { ...CONFIG, approvedManifests: [raw + '/other'] }), false);
-  assert.throws(() => sendSchema({ ...intent(), url: good }));
+  // Messages/notifications moved to Nod: only urgent calls remain, with no install URL.
+  for (const kind of ['need', 'ready-to-try']) assert.throws(() => sendSchema({ ...intent(), kind, reason: kind === 'need' ? 'hands' : 'build' }));
+  assert.throws(() => sendSchema({ ...intent(), url: 'itms-services://?action=download-manifest&url=' + encodeURIComponent('https://test.example-tailnet.invalid/m.plist') }));
 });
 test('private atomic store modes and revision conflicts/out-of-order snapshots', t => {
   const f = fixture(t), d = f.device;
@@ -185,15 +158,14 @@ test('call intent is durable before APNs, minimal payload, coalescing and immuta
   assert.equal(f.service.lookup(f.device, 'need-1').session, 'ses_chief');
   assert.throws(() => f.service.lookup({ deviceID: 'other' }, 'need-1'));
 });
-test('calls-off, stale and quiet policy turn urgent into generic alert only', async t => {
+test('ordinary calls leave phone settings, stale snapshots and quiet decisions to phone', async t => {
   for (const mode of ['off', 'quiet', 'stale']) {
     const f = fixture(t);
     if (mode === 'off') f.service.update(f.device, 'settings', { ...settings, callsEnabled: false, revision: 2 });
     if (mode === 'quiet') f.setNow(Date.parse('2026-01-01T23:00Z') + 5 * 3600000);
     if (mode === 'stale') f.advance(86400000);
     await f.service.send(intent());
-    assert.equal(f.sent.length, 1); assert.equal(f.sent[0].voip, false);
-    assert.equal(f.sent[0].payload.aps.alert.body, 'Agent needs a decision');
+    assert.equal(f.sent.length, 1); assert.equal(f.sent[0].voip, true);
     assert.ok(!JSON.stringify(f.sent[0].payload).includes(intent().body));
   }
 });
@@ -216,9 +188,8 @@ test('legacy override fields remain readable and inert through recovery, coalesc
     // Simulate a queued job reaching dispatch: even a formerly valid grant is inert.
     service.deliver(stored, stored.targets['d:phone'], true); await service.drain();
     assert.equal(f.sent.length, 1);
-    assert.equal(f.sent[0].voip, !quiet);
+    assert.equal(f.sent[0].voip, true);
     assert.equal(Object.hasOwn(f.sent[0].payload, 'acceptance'), false);
-    if (quiet) assert.equal(stored.targets['d:phone'].reason, 'quiet-hours');
     await assert.rejects(service.send({ ...intent('not-chief'), session: 'ses_other' }), /chief/);
   }
 });
@@ -228,23 +199,24 @@ test('answer suppresses fallback, terminal receipts do not resurrect it', async 
   for (const kind of ['reported', 'ringing', 'answered', 'ended', 'declined']) await f.service.event(f.device, { ...event, event: kind });
   f.advance(60000); await f.service.recover(); assert.equal(f.sent.length, 1); assert.equal(f.target('need-1').receipt, 'answered');
 });
-test('decline and report-failure fall back once; late answer never calls again', async t => {
+test('decline, report failure and end only report; no follow-up notification or second call', async t => {
   for (const kind of ['declined', 'report-failed', 'ended']) {
     const f = fixture(t); await f.service.send(intent());
     const event = { reachoutID: 'need-1', callUUID: f.record('need-1').callUUID, event: kind };
     await f.service.event(f.device, event); await f.service.event(f.device, event);
-    f.advance(50000); await f.service.recover();
-    assert.equal(f.sent.length, 2); assert.equal(f.sent[1].voip, false);
-    await f.service.event(f.device, { ...event, event: 'answered' }); await f.service.recover(); assert.equal(f.sent.length, 2);
+    f.advance(50000); await f.service.recover(); await f.service.drain();
+    assert.equal(f.sent.length, 1); assert.equal(f.sent[0].voip, true); assert.equal(f.target('need-1').fallback, undefined);
+    assert.equal(f.service.status('need-1').targets[0].receipt, kind);
+    await f.service.event(f.device, { ...event, event: 'answered' }); await f.service.recover(); assert.equal(f.sent.length, 1);
   }
 });
-test('30-second ring deadline, 45-second fallback and restart recovery', async t => {
+test('30-second ring deadline expires the call; restarts never send anything else', async t => {
   const f = fixture(t); await f.service.send(intent()); f.advance(30000);
   await f.service.recover(); assert.equal(f.target('need-1').receipt, 'expired'); assert.equal(f.sent.length, 1);
   f.advance(15000);
   const restarted = new PushService({ ...f.options, store: new PushStore(f.dir) });
-  await restarted.recover(); await restarted.recover(); assert.equal(f.sent.length, 2);
-  const again = new PushService({ ...f.options, store: new PushStore(f.dir) }); await again.recover(); assert.equal(f.sent.length, 2);
+  await restarted.recover(); await restarted.recover(); assert.equal(f.sent.length, 1);
+  assert.equal(f.target('need-1').fallback, undefined); assert.equal(restarted.localStats().invitations, 0);
 });
 
 test('closed terminal reason survives progress replay and decline stays declined after ended',async t=>{
@@ -260,16 +232,16 @@ test('closed terminal reason survives progress replay and decline stays declined
   assert.equal(f.target('need-1').terminalReceipt.endInitiator,'systemEndAction');
   assert.equal(f.target('need-1').terminalReceipt.reportedRinging,true);
   assert.ok(f.target('need-1').endedAt!==undefined && f.target('need-1').ringingAt!==undefined);
-  assert.equal(f.sent.filter(v=>!v.voip).length,1);
+  assert.equal(f.sent.filter(v=>!v.voip).length,0);
 });
 
-test('report rejection records DND or block code without raw strings and one fallback',async t=>{
+test('report rejection records DND or block code without raw strings and no fallback',async t=>{
   for(const reportFailure of ['filteredByDoNotDisturb','filteredByBlockList']){
     const f=fixture(t);await f.service.send(intent());
     await f.service.event(f.device,{reachoutID:'need-1',callUUID:f.record('need-1').callUUID,event:'report-failed',endReason:'reportRejected',endInitiator:'reportFailure',reportedRinging:false,reportFailure,reportErrorCode:3});
     await f.service.drain();
     assert.equal(f.target('need-1').terminalReceipt.reportFailure,reportFailure);
-    assert.equal(f.target('need-1').receipt,'report-failed');assert.equal(f.sent.filter(v=>!v.voip).length,1);
+    assert.equal(f.target('need-1').receipt,'report-failed');assert.equal(f.sent.filter(v=>!v.voip).length,0);
   }
 });
 
@@ -281,12 +253,12 @@ test('arbitrary end metadata and caller/error text are refused before receipt mu
   assert.equal(f.target('need-1').terminalReceipt,undefined);
 });
 
-test('durable report failure after expired fallback replaces the guess without another notification',async t=>{
+test('durable report failure after expiry replaces the guess without any notification',async t=>{
   const f=fixture(t);await f.service.send(intent());f.advance(50000);await f.service.recover();await f.service.drain();
   assert.equal(f.target('need-1').receipt,'expired');
   await f.service.event(f.device,{reachoutID:'need-1',callUUID:f.record('need-1').callUUID,event:'report-failed',endReason:'reportRejected',endInitiator:'reportFailure',reportedRinging:false,reportFailure:'filteredByDoNotDisturb',reportErrorCode:3});
   await f.service.drain();assert.equal(f.target('need-1').receipt,'report-failed');
-  assert.equal(f.target('need-1').terminalReceipt.reportFailure,'filteredByDoNotDisturb');assert.equal(f.sent.filter(v=>!v.voip).length,1);
+  assert.equal(f.target('need-1').terminalReceipt.reportFailure,'filteredByDoNotDisturb');assert.equal(f.sent.filter(v=>!v.voip).length,0);
 });
 test('uncertain delivery and crash mid-send never retry VoIP; 410 invalidates only matching token', async t => {
   const f = fixture(t); f.service.apns = async request => { f.sent.push(request); throw Error('synthetic loss'); };
@@ -297,24 +269,31 @@ test('uncertain delivery and crash mid-send never retry VoIP; 410 invalidates on
   const g = fixture(t); g.service.apns = async () => ({ status: 410 }); await g.service.send(intent()); await g.service.drain();
   assert.equal(g.service.device('phone').enrollment.voipToken, null); assert.equal(g.service.device('phone').enrollment.alertToken, enrollment.alertToken);
 });
-test('rate limits: outstanding/spacing, daily three, notifications six/hour, reserved fallback', async t => {
+test('ordinary calls retain outstanding safety but have no spacing or daily cap', async t => {
   const f = fixture(t); await f.service.send(intent());
   await f.service.send(intent('second')); assert.equal(f.target('second').reason, 'call-outstanding');
+  assert.equal(f.target('second').state, 'not-called'); assert.equal(f.sent.length, 1);
   await f.service.event(f.device, { reachoutID: 'need-1', callUUID: f.record('need-1').callUUID, event: 'answered' });
   await f.service.event(f.device, { reachoutID: 'need-1', callUUID: f.record('need-1').callUUID, event: 'ended' });
-  await f.service.send(intent('third')); assert.equal(f.target('third').reason, 'call-spacing');
-  for (let n = 2; n <= 3; n++) {
-    f.advance(900000); await f.service.send(intent('call-' + n));
+  for (let n = 2; n <= 5; n++) {
+    await f.service.send(intent('call-' + n));
+    assert.equal(f.target('call-' + n).reason, 'urgent-eligible');
     await f.service.event(f.device, { reachoutID: 'call-' + n, callUUID: f.record('call-' + n).callUUID, event: 'answered' });
     await f.service.event(f.device, { reachoutID: 'call-' + n, callUUID: f.record('call-' + n).callUUID, event: 'ended' });
   }
-  f.advance(900000); await f.service.send(intent('fourth')); assert.equal(f.target('fourth').reason, 'call-daily-limit');
-  const g = fixture(t); await g.service.send(intent());
-  for (let n = 0; n < 6; n++) await g.service.send(intent('alert-' + n, 'need', 'hands'));
-  assert.equal(g.target('alert-5').state, 'suppressed'); g.advance(45000); await g.service.recover(); await g.service.drain();
-  assert.equal(g.sent.filter(s => !s.voip).length, 6);
-  await g.service.send(intent('alert-5', 'need', 'hands')); assert.equal(g.sent.length, 7);
-  g.advance(3600000); await g.service.send(intent('later', 'need', 'hands')); await g.service.drain(); assert.equal(g.sent.length, 8);
+  assert.ok(f.sent.every(s => s.voip));
+});
+test('notification budget does not block ordinary VoIP and duplicate/in-flight reservations remain exact', async t => {
+  const f = fixture(t); f.service.config = { ...f.service.config, notificationsPerHour:0, callsPerDay:0, callSpacingMs:86400000 };
+  await f.service.send(intent()); await f.service.drain();
+  assert.equal(f.sent.length,1); assert.equal(f.sent[0].voip,true);
+  assert.equal(f.target('need-1').reason,'urgent-eligible');
+  assert.equal((await f.service.send(intent())).coalesced,true);
+  await assert.rejects(f.service.send({...intent(),body:'different'}),{status:409});
+  await f.service.send(intent('another')); await f.service.drain();
+  assert.equal(f.sent.length,1);
+  const g = fixture(t); g.service.openVoice = {hasReservation:()=>true};
+  await g.service.send(intent()); assert.equal(g.target('need-1').reason,'call-outstanding');
 });
 test('revocation prevents fallback and device-bound receipts reject foreign identities', async t => {
   const f = fixture(t); await f.service.send(intent());
@@ -322,18 +301,69 @@ test('revocation prevents fallback and device-bound receipts reject foreign iden
   await assert.rejects(f.service.event(f.device, { reachoutID: 'need-1', event: 'answered', callUUID: crypto.randomUUID() }));
   f.revoke(); f.advance(45000); await f.service.recover(); assert.equal(f.sent.length, 1);
 });
-test('policy is checked again immediately before network, and quiet boundary has a ring margin', async t => {
+test('owner ordinary end reconciliation is exact, held, durable and distinct from native receipt', async t => {
+  const f=fixture(t);await f.service.send(intent());await f.service.drain();
+  await f.service.event(f.device,{reachoutID:'need-1',callUUID:f.record('need-1').callUUID,event:'answered'});
+  const request={id:'need-1',deviceID:'phone',callUUID:f.record('need-1').callUUID,provenance:'principal-confirmed ended'};
+  let held=false,resource=0,others=0;
+  f.service.maintenance={refresh:async()=>{},status:()=>({held,invalid:false,counts:{...f.service.localStats(),invitations:f.service.localStats().invitations+others,mediaSessions:resource}})};
+  assert.throws(()=>f.service.reconcileEnded(request),/hold/);held=true;
+  for(const patch of [{id:'wrong'},{deviceID:'foreign'},{callUUID:crypto.randomUUID()},{provenance:'native-ended'}])assert.throws(()=>f.service.reconcileEnded({...request,...patch}));
+  f.record('need-1').openVoice={call_id:'pilot'};assert.throws(()=>f.service.reconcileEnded(request));delete f.record('need-1').openVoice;
+  resource=1;assert.throws(()=>f.service.reconcileEnded(request),/draining/);resource=0;
+  others=1;assert.throws(()=>f.service.reconcileEnded(request),/other ordinary/);others=0;
+  const devices=JSON.stringify(f.service.store.data.devices), before=structuredClone(f.target('need-1'));
+  const sender=await startSender(f.service);
+  try {
+    const result=await socketRequest(sender.socketPath,{command:'reconcile-ended',request},{projectRoot:f.root});
+    assert.equal(result.nativeReceipt,'answered');assert.equal(result.ownerConfirmedEnd.provenance,'principal-confirmed ended');
+    assert.equal(f.service.localStats().invitations,0);
+    assert.deepEqual(f.target('need-1'),{...before,ownerConfirmedEnd:result.ownerConfirmedEnd});
+    assert.equal(JSON.stringify(f.service.store.data.devices),devices);
+    assert.equal(f.target('need-1').endedAt,undefined);assert.equal(f.target('need-1').terminalReceipt,undefined);
+    assert.deepEqual(f.service.reconcileEnded(request),result);
+    assert.deepEqual(new PushStore(f.dir).data.records['r:need-1'].targets['d:phone'].ownerConfirmedEnd,result.ownerConfirmedEnd);
+    await assert.rejects(f.service.event(f.device,{reachoutID:'need-1',event:'ended',callUUID:request.callUUID,ownerConfirmedEnd:result.ownerConfirmedEnd}));
+    await f.service.event(f.device,{reachoutID:'need-1',event:'ended',callUUID:request.callUUID});
+    assert.equal(f.target('need-1').endedAt,f.options.now());assert.deepEqual(f.target('need-1').ownerConfirmedEnd,result.ownerConfirmedEnd);
+  } finally {await sender.close();}
+});
+test('failed reconciliation persistence keeps the outstanding invitation',async t=>{
+  const f=fixture(t);await f.service.send(intent());await f.service.drain();
+  await f.service.event(f.device,{reachoutID:'need-1',callUUID:f.record('need-1').callUUID,event:'answered'});
+  f.service.maintenance={status:()=>({held:true,invalid:false,counts:f.service.localStats()})};
+  const original=f.service.store.save;f.service.store.save=()=>{throw Error('disk failed')};
+  assert.throws(()=>f.service.reconcileEnded({id:'need-1',deviceID:'phone',callUUID:f.record('need-1').callUUID,provenance:'principal-confirmed ended'}),/disk failed/);
+  assert.equal(f.service.localStats().invitations,1);assert.equal(f.target('need-1').ownerConfirmedEnd,undefined);f.service.store.save=original;
+});
+test('owner calls switch rechecked before network while quiet boundary stays phone local', async t => {
   const f = fixture(t);
   const originalSave = f.service.store.save.bind(f.service.store); let updated = false;
   f.service.store.save = () => {
     originalSave();
     if (!updated && f.service.store.data.records['r:need-1']) {
-      updated = true; f.service.device('phone').settings.callsEnabled = false;
+      updated = true; f.service.config = { ...f.service.config, callsEnabled:false };
     }
   };
-  await f.service.send(intent()); assert.equal(f.sent.length, 1); assert.equal(f.sent[0].voip, false);
+  await f.service.send(intent()); await f.service.drain(); assert.equal(f.sent.length, 0);
+  assert.equal(f.target('need-1').state, 'not-called'); assert.equal(f.target('need-1').reason, 'calls-disabled');
   const g = fixture(t); g.setNow(Date.parse('2026-01-02T02:59:45Z'));
-  await g.service.send(intent()); assert.equal(g.target('need-1').reason, 'quiet-boundary'); assert.equal(g.sent[0].voip, false);
+  await g.service.send(intent()); assert.equal(g.target('need-1').reason, 'urgent-eligible'); assert.equal(g.sent[0].voip, true);
+});
+test('phone quiet decline returns declared window without fallback or future server gate', async t => {
+  const f = fixture(t); await f.service.send(intent()); await f.service.drain();
+  const r = f.record('need-1');
+  await f.service.event(f.device,{reachoutID:'need-1',callUUID:r.callUUID,event:'ended',endReason:'admissionRejected',quietUntil:f.options.now()+3600000,quietEnd:'08:00'});
+  const status = f.service.status('need-1');
+  assert.equal(status.disposition,'declined'); assert.equal(status.targets[0].message,'in quiet hours until 08:00');
+  await f.service.recover(); await f.service.drain(); assert.equal(f.sent.length,1);
+  assert.equal(f.target('need-1').reservedFallback,false);
+});
+test('all-day phone quiet decline has no invented end time or fallback', async t => {
+  const f = fixture(t); await f.service.send(intent()); await f.service.drain();
+  await f.service.event(f.device,{reachoutID:'need-1',callUUID:f.record('need-1').callUUID,event:'ended',endReason:'admissionRejected',quietEnd:'all-day'});
+  assert.equal(f.service.status('need-1').targets[0].message,'in quiet hours all day');
+  await f.service.recover(); await f.service.drain(); assert.equal(f.sent.length,1);
 });
 test('origin authority and chief rotation fail before persisted intent', async t => {
   const f = fixture(t);
@@ -342,14 +372,14 @@ test('origin authority and chief rotation fail before persisted intent', async t
   f.service.validateOrigin = async () => { f.service.chief = () => 'ses_new'; };
   await assert.rejects(f.service.send(intent()), /chief changed/); assert.equal(f.sent.length, 0); assert.equal(f.service.records().length, 0);
 });
-test('fallback crash intent is never retried; short call expiry does not expire detail lookup', async t => {
+test('legacy crash-uncertain fallback is never re-sent; short call expiry does not expire detail lookup', async t => {
   const f = fixture(t); await f.service.send({ ...intent(), expiresIn: 30 });
   f.advance(45000); await f.service.recover();
   assert.equal(f.service.lookup(f.device, 'need-1').callExpiry < f.options.now(), true);
-  assert.equal(f.sent[1].payload.expiry > f.options.now(), true);
-  f.target('need-1').fallback.state = 'delivery-unknown'; f.service.store.save();
+  // An old (pre-Nod) record left with a queued fallback settles as uncertain, never sends.
+  f.target('need-1').fallback = { state: 'dispatch-queued', reservedAt: f.options.now() }; f.service.store.save();
   const restarted = new PushService({ ...f.options, store: new PushStore(f.dir) }); await restarted.recover();
-  assert.equal(f.sent.length, 2);
+  assert.equal(f.sent.length, 1); assert.equal(restarted.store.data.records['r:need-1'].targets['d:phone'].fallback.state, 'delivery-unknown');
   restarted.store.save = () => { throw Error('idle recovery must not keep writing expired records'); };
   await restarted.recover();
   f.advance(3600000); assert.throws(() => restarted.lookup(f.device, 'need-1'), /expired/);
@@ -362,12 +392,15 @@ test('answered calls stay outstanding until End, even beyond spacing', async t =
   await f.service.event(f.device, { ...receipt, event: 'ended' });
   await f.service.send(intent('allowed')); assert.equal(f.sent.at(-1).voip, true);
 });
-test('notification ledger is persistent across restart and token invalidation is explicit', async t => {
-  const f = fixture(t); await f.service.send(intent('alert', 'need', 'hands'));
+test('call ledger is persistent across restart; a missing VoIP token reports not called, never a notification', async t => {
+  const f = fixture(t); await f.service.send(intent());
   const restarted = new PushService({ ...f.options, store: new PushStore(f.dir) });
-  assert.equal((await restarted.send(intent('alert', 'need', 'hands'))).coalesced, true); assert.equal(f.sent.length, 1);
-  restarted.update(f.device, 'enrollment', { ...enrollment, revision: 2, voipToken: null });
-  await restarted.send(intent()); assert.equal(f.sent.at(-1).voip, false);
+  assert.equal((await restarted.send(intent())).coalesced, true); assert.equal(f.sent.length, 1);
+  await restarted.event(f.device, { reachoutID: 'need-1', callUUID: f.record('need-1').callUUID, event: 'ended' });
+  restarted.update(f.device, 'enrollment', { ...enrollment, revision: 2, voipToken: null, alertToken: null });
+  await restarted.send(intent('no-token')); assert.equal(f.sent.length, 1);
+  const t2 = restarted.store.data.records['r:no-token'].targets['d:phone'];
+  assert.equal(t2.state, 'not-called'); assert.equal(t2.reason, 'no-voip-token');
   assert.throws(() => restarted.update(f.device, 'enrollment', enrollment), /stale/);
 });
 test('socket recovers a stale endpoint and private storage refuses symlinks', async t => {
@@ -382,11 +415,13 @@ test('socket recovers a stale endpoint and private storage refuses symlinks', as
   assert.throws(() => new PushStore(link), /private/);
 });
 test('CLI dry-run is completely offline and exact flag parser rejects duplicates', async () => {
-  const flags = ['send', '--kind', 'need', '--reason', 'hands', '--session', 'ses_chief', '--id', 'unlock-1', '--title', 'Unlock needed', '--body', 'Please unlock.', '--dry-run'];
+  const flags = ['send', '--kind', 'urgent-call', '--reason', 'decision', '--session', 'ses_chief', '--id', 'unlock-1', '--title', 'Decision needed', '--body', 'Please decide.', '--dry-run'];
   assert.equal((await main(flags)).disposition, 'dry-run');
   assert.throws(() => parseArgs([...flags, '--id', 'duplicate']));
   assert.throws(() => parseArgs(['status', '--id', 'a', '--body', 'bad']));
   assert.throws(() => parseArgs([...flags, '--test-approval', '/private/retired.json']));
+  assert.throws(() => parseArgs([...flags, '--url', 'itms-services://?action=download-manifest&url=x']));
+  assert.throws(() => parseArgs(['dev-override', 'status']));
 });
 test('Unix socket permissions, protocol schema, status, restart, and no HTTP sender route', async t => {
   const f = fixture(t); const sender = await startSender(f.service); t.after(() => sender.close());
@@ -400,7 +435,7 @@ test('Unix socket permissions, protocol schema, status, restart, and no HTTP sen
   const file = path.join(f.dir, 'credentials-test.json'), bearer = 'z'.repeat(43);
   fs.writeFileSync(file, JSON.stringify({ devices: { [crypto.createHash('sha256').update(bearer).digest('hex')]: { deviceID: 'phone' },
     [crypto.createHash('sha256').update('t'.repeat(43)).digest('hex')]: { deviceID: 'test', test: { sessionID: 'ses_test', expires: Date.now() + 100000 } } } }), { mode: 0o600 });
-  const bridge = createBridge({ credentials: new Credentials(file), push: f.service }); await new Promise(resolve => bridge.listen(0, '127.0.0.1', resolve));
+  const bridge = createBridge({ credentials: new Credentials(file), ...unpairedDesktop(t), push: f.service }); await new Promise(resolve => bridge.listen(0, '127.0.0.1', resolve));
   t.after(() => bridge.shutdown());
   async function call(route, method = 'GET', data, auth = bearer) {
     const response = await fetch(`http://127.0.0.1:${bridge.address().port}/floating-voice/v1/push/${route}`, { method,

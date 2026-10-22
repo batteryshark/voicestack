@@ -146,6 +146,35 @@ import Testing
     @Test func unknownCursorContinuesSameSpeakerTicketWithoutPauseNoticeOrSynthesis() async {
         await exerciseSpeakerRebuild(unknown: true)
     }
+    @Test func renderedObservationNeverCountsSchedulingOrUnknownSkippedSuffix() {
+        let pcm = PlaybackContinuity(queue:PlaybackBufferScheduler())
+        for start in stride(from:0,to:160,by:40) { pcm.append(data(start..<start+40),token:pcm.queue.schedule()!) }
+        let first = pcm.segments[0], receipt = pcm.completionReceipt(for:first)
+        #expect(pcm.deliverySnapshot().samples == 0)
+        #expect(receipt.record()); #expect(pcm.completed(first.token,revision:0))
+        #expect(pcm.deliverySnapshot().samples == 40)
+        _ = pcm.suspend(renderedFrames:nil)
+        #expect(pcm.position == 80 && pcm.skippedFrames == 40)
+        #expect(pcm.deliverySnapshot().samples == 40 && !pcm.deliverySnapshot().known)
+        pcm.resume()
+        for segment in pcm.segments {
+            let later = pcm.completionReceipt(for:segment)
+            #expect(later.record()); #expect(pcm.completed(segment.token,revision:pcm.revision))
+        }
+        #expect(pcm.position == 160)
+        #expect(pcm.deliverySnapshot(renderedFrames:160).samples == 40)
+    }
+    @Test func knownSuffixRepairObservationUsesRelativeClockWithoutReplayCredit() {
+        let pcm = PlaybackContinuity(queue:PlaybackBufferScheduler())
+        pcm.append(data(0..<100),token:pcm.queue.schedule()!)
+        let stale = pcm.completionReceipt(for:pcm.segments[0])
+        #expect(pcm.deliverySnapshot(renderedFrames:25).samples == 25)
+        _ = pcm.suspend(renderedFrames:25); pcm.resume()
+        #expect(!stale.record())
+        #expect(pcm.deliverySnapshot(renderedFrames:15).samples == 40)
+        #expect(pcm.position == 25) // observer does not move the existing repair cursor
+        #expect(pcm.deliverySnapshot().known)
+    }
     private func exerciseSpeakerRebuild(unknown: Bool) async {
         let synth = ContinuitySynth(), output = ContinuityOutput()
         let speaker = Speaker(synth: synth, output: output, onError: { Issue.record($0) })

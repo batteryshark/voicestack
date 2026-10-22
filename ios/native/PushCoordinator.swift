@@ -1,6 +1,5 @@
 import UIKit
 import PushKit
-import UserNotifications
 import SwiftUI
 
 @MainActor final class PushAppDelegate: NSObject, UIApplicationDelegate {
@@ -8,33 +7,75 @@ import SwiftUI
         PushCoordinator.shared.start(model: PhoneModel.shared)
         return true
     }
-    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken token: Data) {
-        PushCoordinator.shared.token(token, voip: false)
-    }
-    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
-        PushCoordinator.shared.registrationFailed()
-    }
 }
 
-@MainActor final class PushCoordinator: NSObject, ObservableObject, @preconcurrency PKPushRegistryDelegate, @preconcurrency UNUserNotificationCenterDelegate {
+/// VoIP/CallKit only. Messages and notifications go through Nod; this app neither
+/// requests notification permission nor registers an alert token (none is revoked).
+@MainActor final class PushCoordinator: NSObject, ObservableObject, @preconcurrency PKPushRegistryDelegate {
     static let shared = PushCoordinator()
     @Published private(set) var policy: PushPolicySync
     @Published private(set) var syncStatus = "Not synced"
-    @Published private(set) var permission = "Not requested"
+    @Published private(set) var localPolicy = ReachOutPolicy()
+    private var phonePolicy: ReachOutPolicy { var p = localPolicy; p.timeZone = TimeZone.current.identifier; return p }
+    private var pilotPolicyAllowed: Bool { policy.allowsPilotCall(at:Date(),timeZone:TimeZone.current.identifier) }
+    func editLocalPolicy(_ value: ReachOutPolicy) {
+        localPolicy = value
+        defaults.set(try? JSONEncoder().encode(value),forKey:"phone.callPolicy")
+        if !phonePolicy.localCallsAllowed(at:Date()), model?.calls.lifecycle.state == .ringing { model?.calls.restrictPolicy() }
+    }
     private var registry: PKPushRegistry?
     private weak var model: PhoneModel?
     private var worker: Task<Void, Never>?
     private var dirty = false
     private let defaults = UserDefaults.standard
-    private var alertToken: String?
     private var voipToken: String?
     private var revision: Int
     private var enrollmentAck = 0
-    private let tapQueue = NotificationTapQueue()
     private var fallbackIDs: [String: UUID] = [:]
     private let receiptOutbox: PushReceiptOutbox
     private var receiptWorker: Task<Void, Never>?
     private var seenCalls: Set<String>
+    @Published private(set) var openVoiceEnabled = UserDefaults.standard.bool(forKey:"openVoice.enabled")
+    private var capabilityExpiry: Date { capabilitySync.expiresAt }
+    private lazy var capabilitySync = OpenVoiceCapabilitySync(state:.init(desiredEnabled:openVoiceEnabled,mayBeEnabled:defaults.bool(forKey:"openVoice.advertised"),enableNeedsExplicitChoice:defaults.bool(forKey:"openVoice.enableUncertain")),persist:{ [weak self] state in
+        guard let self else { throw ClientError("Capability storage unavailable") }
+        self.defaults.set(state.desiredEnabled,forKey:"openVoice.enabled")
+        self.defaults.set(state.mayBeEnabled,forKey:"openVoice.advertised")
+        self.defaults.set(state.enableNeedsExplicitChoice,forKey:"openVoice.enableUncertain")
+        guard self.defaults.synchronize() else { throw ClientError("Capability storage unavailable") }
+    },upload:{ [weak self] enabled in
+        guard let self else { throw ClientError("Capability unavailable") }
+        let control = try self.candidateControl(); defer { control.close() }
+        return try await control.capability(enabled:enabled,build:String(InstalledBuild.number))
+    })
+    private var operationReviewWorker: Task<Void,Never>?
+    func setOpenVoiceEnabled(_ enabled: Bool) {
+        // Initialize from persisted state BEFORE changing the published local gate.
+        let sync = capabilitySync
+        openVoiceEnabled = enabled; sync.setDesired(enabled)
+        refreshOpenVoiceCapability()
+        if !enabled { model?.revokeOpenVoiceReadiness() }
+    }
+    private func candidateControl() throws -> OpenVoiceRecipientControl {
+        let transport = try transport()
+        guard let bearer = try KeychainCredential().load(),
+              var origin = URLComponents(url:transport.base,resolvingAgainstBaseURL:false) else { throw ClientError("Pairing unavailable") }
+        origin.path = ""; origin.query = nil; origin.fragment = nil
+        guard let url = origin.url else { throw ClientError("Bridge unavailable") }
+        return try OpenVoiceRecipientControl(origin:url,credential:OpenVoiceDeviceCredential(pairedDeviceBearer:bearer))
+    }
+    private func refreshOpenVoiceCapability() {
+        guard !isTest else { return }
+        capabilitySync.refresh()
+    }
+    func reviewOpenVoiceOperation() {
+        guard !isTest, let model, !model.hasCall, operationReviewWorker == nil else { return }
+        operationReviewWorker = Task {
+            defer { operationReviewWorker = nil }
+            do { await model.reviewOpenVoiceOperation(using:try candidateControl()) }
+            catch { model.error = "Pilot operation unavailable; no resend" }
+        }
+    }
     override init() {
         receiptOutbox = PushReceiptOutbox(file: URL.applicationSupportDirectory.appendingPathComponent("Push/receipt-outbox23.json"))
         policy = UserDefaults.standard.data(forKey: "push.policy").flatMap { try? JSONDecoder().decode(PushPolicySync.self, from: $0) } ?? PushPolicySync()
@@ -42,10 +83,8 @@ import SwiftUI
         seenCalls = Set(UserDefaults.standard.stringArray(forKey: "push.seenCalls") ?? [])
         // Tokens are reacquired from the OS, not copied or stored in diagnostics/defaults.
         super.init()
+        localPolicy = defaults.data(forKey:"phone.callPolicy").flatMap { try? JSONDecoder().decode(ReachOutPolicy.self,from:$0) } ?? policy.desired
     }
-#if DEBUG && targetEnvironment(simulator)
-    func polishDenied() { permission = "Denied · enable in iOS Settings" }
-#endif
     private var isTest: Bool {
         DeviceAudioProbe.enabled || PhoneLoopProbe.enabled || SpeakerEchoProbe.enabled || ProcessInfo.processInfo.arguments.contains("-FVSimulatorProof") || ProcessInfo.processInfo.arguments.contains("-FVRichFixture") || ProcessInfo.processInfo.arguments.contains("-FVPolish")
     }
@@ -54,31 +93,44 @@ import SwiftUI
         _ = model.calls
         model.calls.resolveIncoming = { [weak model, weak self] invitation in
             guard let self, let model, let id = invitation.reachoutID else { throw ClientError("Call unavailable") }
-            guard self.policy.allowsCall(at: Date()), (invitation.expiry ?? .distantPast) > Date() else { throw ClientError("Call no longer allowed") }
-            let target = try await IncomingCallResolution.resolve(invitation: invitation, lifecycle: model.calls.lifecycle, lookup: {
-                let record = try await self.transport().json("/v1/push/reachouts/" + id)
-                return try ReachOutContext(record: record, reachoutID: id, invitation: invitation)
-            }, join: { context, owner in
-                try owner.validate(model.calls.lifecycle)
-                guard self.policy.allowsCall(at: Date()) else { throw ClientError("Call no longer allowed") }
-                return try await model.joinInvitation(context, owner: owner)
-            })
-            guard self.policy.desired.timeZone == TimeZone.current.identifier,
-                  self.policy.allowsCall(at: Date()), (invitation.expiry ?? .distantPast) > Date() else { throw ClientError("Call no longer allowed") }
+            guard self.phonePolicy.localCallsAllowed(at: Date()), (invitation.expiry ?? .distantPast) > Date() else { throw ClientError("Call no longer allowed") }
+            let owner = try IncomingCallOwner(lifecycle:model.calls.lifecycle,invitation:invitation)
+            let record = try await self.transport().json("/v1/push/reachouts/" + id)
+            try owner.validate(model.calls.lifecycle)
+            let isPilot = record["context"] as? String == "open-voice"
+            let target: TargetLease
+            if isPilot {
+                guard self.pilotPolicyAllowed, self.openVoiceEnabled, self.capabilityExpiry > Date() else { throw ClientError("New conversation capability unavailable") }
+                let control = try self.candidateControl()
+                do {
+                    target = try await model.joinOpenVoice(record:JSONSerialization.data(withJSONObject:record),push:invitation,owner:owner,control:control) {
+                        self.openVoiceEnabled && self.capabilityExpiry > Date() && self.pilotPolicyAllowed
+                    }
+                } catch { control.close(); throw error }
+            } else {
+                let context = try ReachOutContext(record:record,reachoutID:id,invitation:invitation)
+                guard self.phonePolicy.localCallsAllowed(at:Date()) else { throw ClientError("Call no longer allowed") }
+                target = try await model.joinInvitation(context,owner:owner)
+            }
+            try owner.validate(model.calls.lifecycle)
+            guard !isPilot || self.pilotPolicyAllowed else { throw ClientError("Call no longer allowed") }
+            guard self.phonePolicy.localCallsAllowed(at: Date()), (invitation.expiry ?? .distantPast) > Date() else { throw ClientError("Call no longer allowed") }
             return target
         }
-        model.calls.detailedReceipt = { [weak self] invitation, receipt in
-            guard let id = invitation.reachoutID else { return }
+        model.calls.detailedReceipt = { [weak self, weak model] invitation, receipt in
+            guard let model, let id = invitation.reachoutID else { return }
+            var receipt = receipt
+            if receipt.event == .ended, receipt.endReason == .admissionRejected,
+               let policy = self?.phonePolicy, policy.isValid, policy.quietHoursEnabled, policy.isQuiet(at:Date()) {
+                receipt.quietUntil = policy.quietUntil(at:Date()).map { $0.timeIntervalSince1970 * 1000 }
+                receipt.quietEnd = policy.quietStart == policy.quietEnd ? "all-day" : policy.quietEnd
+            }
+            if receipt.event == .ended, model.deferOpenVoiceReceipt(invitation.id,send:{ [weak self] in self?.sendReceipt(id,call:invitation.id,receipt:receipt) }) { return }
             self?.sendReceipt(id, call: invitation.id, receipt: receipt)
-            if receipt.event == .answered { self?.removeNotifications(id) }
         }
         guard registry == nil, !isTest else { return }
         if receiptOutbox.loadFailed { StageDiagnostics.shared.record(.pushReceipt, .failed, status: 1, callEvent: .receiptDeferred) }
         flushReceiptOutbox()
-        let center = UNUserNotificationCenter.current(); center.delegate = self
-        center.setNotificationCategories(Set([("NEED", "Open conversation"), ("READY_TO_TRY", "Review build"), ("URGENT_FALLBACK", "Open")].map { category, title in
-            UNNotificationCategory(identifier: category, actions: [UNNotificationAction(identifier: "OPEN", title: title, options: [.foreground, .authenticationRequired])], intentIdentifiers: [], options: [.customDismissAction])
-        }))
         let registry = PKPushRegistry(queue: .main); self.registry = registry
         registry.delegate = self; registry.desiredPushTypes = [.voIP]
         NotificationCenter.default.addObserver(forName: NSNotification.Name.NSSystemTimeZoneDidChange, object: nil, queue: .main) { [weak self] _ in
@@ -92,40 +144,23 @@ import SwiftUI
     }
     func foreground() {
         guard !isTest else { return }
+        refreshOpenVoiceCapability()
         flushReceiptOutbox()
         var desired = policy.desired; desired.timeZone = TimeZone.current.identifier
         edit(desired)
-        Task {
-            let settings = await UNUserNotificationCenter.current().notificationSettings()
-            let allowed = [.authorized, .provisional, .ephemeral].contains(settings.authorizationStatus)
-            permission = allowed ? "Allowed · respects Focus" : (settings.authorizationStatus == .denied ? "Denied · enable in iOS Settings" : "Not requested")
-            if allowed { UIApplication.shared.registerForRemoteNotifications() }
-            else { token(nil, voip: false) }
-            // Refresh server-invalidated enrollment at a newer revision on each foreground.
-            revision += 1; defaults.set(revision, forKey: "push.revision")
-            retry()
-            await routePendingTap()
-        }
+        // Refresh server-invalidated enrollment at a newer revision on each foreground.
+        revision += 1; defaults.set(revision, forKey: "push.revision")
+        retry()
     }
-    func requestPermission() {
-        Task {
-            _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
-            foreground()
-        }
-    }
-    func registrationFailed() {
-        syncStatus = "Alert registration failed · Retry"
-        StageDiagnostics.shared.record(.pushEnrollment, .failed, status: 1)
-    }
-    func token(_ data: Data?, voip: Bool) {
+    func token(_ data: Data?) {
         let value = data?.map { String(format: "%02x", $0) }.joined()
-        guard (voip ? voipToken : alertToken) != value else { return }
-        if voip { voipToken = value } else { alertToken = value }
+        guard voipToken != value else { return }
+        voipToken = value
         revision += 1; defaults.set(revision, forKey: "push.revision"); retry()
     }
     func edit(_ desired: ReachOutPolicy) {
         policy.edit(desired)
-        if !policy.allowsCall(at: Date()), model?.calls.lifecycle.state == .ringing { model?.calls.restrictPolicy() }
+        if !phonePolicy.localCallsAllowed(at: Date()), model?.calls.lifecycle.state == .ringing { model?.calls.restrictPolicy() }
         defaults.set(try? JSONEncoder().encode(policy), forKey: "push.policy")
         syncStatus = "Not synced · restrictive changes apply now"
         retry()
@@ -148,7 +183,7 @@ import SwiftUI
                 let snapshot = self.policy.desired, revision = self.revision
                 // Generated from the signing entitlements; verify checks the exported signature agrees.
                 let environment = Bundle.main.object(forInfoDictionaryKey: "PushEnvironment") as? String ?? ""
-                let enrollment: [String: Any] = ["alertToken": self.alertToken as Any? ?? NSNull(), "voipToken": self.voipToken as Any? ?? NSNull(), "environment": environment, "build": String(InstalledBuild.number), "revision": revision]
+                let enrollment: [String: Any] = ["alertToken": NSNull(), "voipToken": self.voipToken as Any? ?? NSNull(), "environment": environment, "build": String(InstalledBuild.number), "revision": revision]
                 var stage = DiagnosticStage.pushEnrollment
                 do {
                     let transport = try self.transport()
@@ -227,7 +262,7 @@ import SwiftUI
             }
         }
     }
-    func pushRegistry(_ registry: PKPushRegistry, didUpdate credentials: PKPushCredentials, for type: PKPushType) { token(credentials.token, voip: true) }
+    func pushRegistry(_ registry: PKPushRegistry, didUpdate credentials: PKPushCredentials, for type: PKPushType) { token(credentials.token) }
     func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
         voipToken = nil; revision += 1; defaults.set(revision, forKey: "push.revision"); retry()
     }
@@ -239,48 +274,13 @@ import SwiftUI
         let invitation = PushInvitation(payload: values, fallbackID: fallback)
         let replay = seenCalls.contains(invitation.id.uuidString)
         let capacity = seenCalls.count < 10_000
-        let normalPolicy = policy.desired.timeZone == TimeZone.current.identifier && policy.allowsCall(at: Date())
+        let normalPolicy = phonePolicy.localCallsAllowed(at:Date())
         PhoneModel.shared.calls.receivePush(invitation, allowed: !replay && capacity && normalPolicy, completion: completion)
         // Mandatory report has already been invoked. Never put disk access ahead of it.
         StageDiagnostics.shared.record(.call, .policyGate, audio: CaptureSnapshot([.pushReplay: replay ? 1 : 0, .pushCapacity: capacity ? 1 : 0,
             .pushPolicyAllowed: normalPolicy ? 1 : 0]), callEvent: .pushAdmission)
         if !replay && capacity {
             seenCalls.insert(invitation.id.uuidString); defaults.set(Array(seenCalls), forKey: "push.seenCalls")
-        }
-    }
-    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completion: @escaping (UNNotificationPresentationOptions) -> Void) {
-        completion([.banner, .list, .sound]) // Generic system text only; no lookup or action on arrival.
-    }
-    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completion: @escaping () -> Void) {
-        defer { completion() }
-        guard response.actionIdentifier != UNNotificationDismissActionIdentifier,
-              [UNNotificationDefaultActionIdentifier, "OPEN"].contains(response.actionIdentifier),
-              let id = response.notification.request.content.userInfo["reachoutID"] as? String, PushInvitation.validID(id),
-              ReachOutContext.categoryAllowed(response.notification.request.content.categoryIdentifier) else { return }
-        StageDiagnostics.shared.record(.notificationRoute, .complete, routePhase: .received)
-        tapQueue.enqueue(.init(id: id, category: response.notification.request.content.categoryIdentifier))
-        Task { await routePendingTap() }
-    }
-    private func routePendingTap() async {
-        do {
-            try await tapQueue.drain(ready: {
-                UIApplication.shared.applicationState == .active && UIApplication.shared.isProtectedDataAvailable && self.model != nil
-            }, route: { tap in
-                guard let model = self.model else { throw NotificationRouteFailure.preparation }
-                let context = try await NotificationRouting.step(.lookup) {
-                    let record = try await self.transport().json("/v1/push/reachouts/" + tap.id)
-                    do { return try ReachOutContext(record: record, reachoutID: tap.id) }
-                    catch { throw NotificationRouteFailure.invalidContext }
-                }
-                try await model.openReachOut(context, reviewBuild: tap.category == "READY_TO_TRY")
-                try await NotificationRouting.step(.receipt) { self.sendReceipt(tap.id, event: "notification-opened") }
-            })
-        } catch { model?.error = "Notification: Couldn't open that message" }
-    }
-    private func removeNotifications(_ id: String) {
-        UNUserNotificationCenter.current().getDeliveredNotifications { notifications in
-            let ids = notifications.filter { $0.request.content.userInfo["reachoutID"] as? String == id }.map { $0.request.identifier }
-            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ids)
         }
     }
 }
@@ -290,32 +290,30 @@ struct ReachOutSettingsView: View {
     var body: some View {
         Section("\(AgentPresentation.name) reach-out") {
             Toggle("Calls", isOn: binding(\.callsEnabled))
-            Toggle("Quiet hours · notifications only", isOn: binding(\.quietHoursEnabled))
+            Toggle("New conversation calls · pilot", isOn: Binding(get:{ push.openVoiceEnabled },set:{ push.setOpenVoiceEnabled($0) }))
+            if push.openVoiceEnabled { Button("Review last pilot operation") { push.reviewOpenVoiceOperation() } }
+            Toggle("Quiet hours · decline calls on this phone", isOn: binding(\.quietHoursEnabled))
             HStack {
                 time("From", key: \.quietStart)
                 time("Until", key: \.quietEnd)
             }
-            Text("\(push.policy.desired.timeZone) · \(push.syncStatus)").font(.caption)
-            Text("Notifications: \(push.permission)").font(.caption)
-            HStack {
-                Button("Enable notifications") { push.requestPermission() }
-                Spacer(); Button("Retry") { push.foreground() }
-            }
-            Text("\(AgentPresentation.name) can ask for a decision or your hands, or share a build ready to try. No milestone news. Calls are for urgent decisions; unanswered calls become one notification. Focus is respected; lock-screen text stays generic.").font(.caption).foregroundStyle(.secondary)
+            Text("\(TimeZone.current.identifier) · call settings saved on this phone").font(.caption)
+            HStack { Spacer(); Button("Retry") { push.foreground() } }
+            Text("Calls are for urgent decisions. An unanswered call only reports its outcome; messages arrive through Nod. Focus is respected.").font(.caption).foregroundStyle(.secondary)
         }
     }
     private func binding(_ key: WritableKeyPath<ReachOutPolicy, Bool>) -> Binding<Bool> {
-        Binding(get: { push.policy.desired[keyPath: key] }, set: { var p = push.policy.desired; p[keyPath: key] = $0; push.edit(p) })
+        Binding(get: { push.localPolicy[keyPath: key] }, set: { var p = push.localPolicy; p[keyPath: key] = $0; push.editLocalPolicy(p) })
     }
     private func time(_ title: String, key: WritableKeyPath<ReachOutPolicy, String>) -> some View {
         VStack(alignment: .leading, spacing: 2) {
         Text(title).font(.caption)
         DatePicker(title, selection: Binding(get: {
-            let parts = push.policy.desired[keyPath: key].split(separator: ":").compactMap { Int($0) }
+            let parts = push.localPolicy[keyPath: key].split(separator: ":").compactMap { Int($0) }
             return Calendar.current.date(from: DateComponents(hour: parts.first ?? 22, minute: parts.last ?? 0)) ?? Date()
         }, set: { date in
             let c = Calendar.current.dateComponents([.hour, .minute], from: date)
-            var p = push.policy.desired; p[keyPath: key] = String(format: "%02d:%02d", c.hour ?? 0, c.minute ?? 0); push.edit(p)
+            var p = push.localPolicy; p[keyPath: key] = String(format: "%02d:%02d", c.hour ?? 0, c.minute ?? 0); push.editLocalPolicy(p)
         }), displayedComponents: .hourAndMinute).labelsHidden().accessibilityLabel(title)
         }
     }

@@ -180,7 +180,7 @@ public final class ConversationController {
         public init() {}
         init(lastError: String?, notice: String?) { self.lastError = lastError; self.notice = notice }
 
-        /// "Chief of staff · a10001": the title and a short id, so the header never just says "Chief".
+        /// "Chief of staff · SYNTHE": the title and a short id, so the header never just says "Chief".
         public var targetLabel: String? {
             guard let target else { return nil }
             let title = (targetTitle?.isEmpty == false) ? targetTitle! : "Session"
@@ -729,6 +729,13 @@ public final class ConversationController {
             guard let self, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
             self.draftsForReview.append(text)
             self.status.notice = "Recognition interrupted · known words retained locally for review, not sent."
+        }
+        callbacks.transcribing = { [weak self] active in
+            guard let self else { return }
+            let notice = "Still transcribing…"
+            if active {
+                if self.status.notice == nil { self.status.notice = notice }
+            } else if self.status.notice == notice { self.status.notice = nil }
         }
         callbacks.ended = { [weak self] length, voiced in
             guard let self else { return }

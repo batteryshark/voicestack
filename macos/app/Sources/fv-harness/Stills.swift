@@ -103,7 +103,7 @@ private func makeState(_ configure: (PillModel, inout ConversationController.Sta
     status.running = true
     status.phase = "ready"
     status.connection = "connected"
-    status.target = "ses_a10001fixture0000000000"
+    status.target = "ses_SYNTHETIC0022c76RThXACt6GCT"
     status.targetTitle = "Chief of staff"
     pill.update(status: status)
     configure(pill, &status, { clock += $0 })
@@ -136,17 +136,17 @@ func sampleSettings() -> SettingsState {
     s.voices = [.init(id: "female_a", label: "Original (female_a)"), .init(id: "mizuki", label: "Mizuki"), .init(id: "ganyu", label: "Ganyu")]
     s.serverDefaultVoice = "mizuki"
     s.inputs = [.init(id: "nexigo", label: "NexiGo N960E Pro Webcam Audio"), .init(id: "builtin", label: "MacBook Pro Microphone")]
-    s.outputs = [.init(id: "synthetic-output-device-fixture", label: "WH-1000XM5"), .init(id: "speakers", label: "MacBook Pro Speakers")]
+    s.outputs = [.init(id: "88-C9-E8-15-D0-18:output", label: "WH-1000XM5"), .init(id: "speakers", label: "MacBook Pro Speakers")]
     s.voice = "default"
     s.inputDevice = "nexigo"
-    s.outputDevice = "synthetic-output-device-fixture"
+    s.outputDevice = "88-C9-E8-15-D0-18:output"
     s.echoCancellation = "auto"
     s.pauseMs = 3200
     s.busyDelivery = .queue
     s.target = "chief"
     s.chiefSource = "chief.json"
-    s.sessions = [.init(id: "ses_a10001fixture0000000000", label: "Chief of staff · a10001"), .init(id: "ses_a10002fixture0000000000", label: "Pill behaviour · a10002"),
-                  .init(id: "ses_a10003fixture0000000000", label: "Fixture task · a10003")]
+    s.sessions = [.init(id: "ses_SYNTHETIC0022c76RThXACt6GCT", label: "Chief of staff · SYNTHE"), .init(id: "ses_SYNTHETIC0018", label: "Pill behaviour · SYNTHE"),
+                  .init(id: "ses_SYNTHETIC0025", label: "Synthetic sample project · SYNTHE")]
     s.running = true
     s.appFile = "~/.config/floating-voice/settings.json"
     return s

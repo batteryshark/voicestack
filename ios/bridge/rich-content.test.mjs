@@ -10,6 +10,7 @@ import child from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { Capabilities, validateBytes, assetDescription, base64, exactReference, readAsset, canvasAssociation, byteRange, phoneProjection } from './rich-content.mjs';
 import { createBridge } from './server.mjs';
+import { syntheticDesktop } from './fixtures/synthetic-desktop.mjs';
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGPwWPEBAAMcAeFR2BKRAAAAAElFTkSuQmCC', 'base64');
 function tinyPDF() {
@@ -22,6 +23,29 @@ function tinyPDF() {
   return Buffer.from(text + `trailer\n<</Size 4 /Root 1 0 R>>\nstartxref\n${xref}\n%%EOF\n`);
 }
 const pdf = tinyPDF();
+test('synthetic paired fixture client uses only its explicit binding and owned loopback server', async t => {
+  const fake = http.createServer((req, res) => { desktop.accept(req, res); });
+  fake.listen(0, '127.0.0.1'); await once(fake, 'listening');
+  const desktop = syntheticDesktop(t, fake);
+  const originalRequest = http.request;
+  const requests = [];
+  t.mock.method(http, 'request', function (options, ...args) {
+    assert.equal(options.hostname ?? options.host, '127.0.0.1', 'no external hostname or DNS request');
+    assert.equal(Number(options.port), fake.address().port, 'no service outside the owned listener');
+    requests.push(options.path);
+    return originalRequest.call(this, options, ...args);
+  });
+  try {
+    assert.ok(desktop.ocClient.file.startsWith(path.join(os.tmpdir(), 'fv-synthetic-desktop-')));
+    assert.equal(desktop.ocClient.file, desktop.file);
+    const context = await desktop.ocClient.prepare(fake.address().port);
+    assert.deepEqual(context, { port: fake.address().port, paired: true, headers: { Authorization: 'Bearer oc_client_SYNTHETIC_RICH_FIXTURE' } });
+    assert.deepEqual(requests, ['/health']);
+    assert.deepEqual(desktop.requests, ['/health']);
+    assert.throws(() => desktop.ocClient.prepare(0), /only the owned fixture listener/);
+    assert.deepEqual(requests, ['/health'], 'wrong targets are rejected before any request');
+  } finally { t.mock.restoreAll(); fake.closeAllConnections(); await new Promise(r => fake.close(r)); }
+});
 test('history and live projection strip viewer capabilities while preserving unknown fields', () => {
   const raw = { future: { keep: true }, viewerKey: 'SECRET', tool: JSON.stringify({ browserUrl: 'https://canvas.invalid/#key=SECRET&view=panel' }), text: '[panel](https://canvas.invalid/#key=SECRET&view=panel)' };
   const projected = phoneProjection(raw);
@@ -46,20 +70,22 @@ test('bounded signatures, MIME, base64 and decoded dimensions', () => {
     assert.throws(() => validateBytes(oversized, 'image/png'), { status: 413 });
   }
 });
-test('review regression: compressed PDF bomb is never an inline preview or byte capability', async () => {
+test('review regression: compressed PDF bomb is never an inline preview or byte capability', async t => {
   const decodedLength = 128 * 1024 * 1024, compressed = deflateSync(Buffer.alloc(decodedLength, 32));
   const bomb = Buffer.concat([Buffer.from(`%PDF-1.4\n1 0 obj << /Length ${compressed.length} /Filter /FlateDecode >>\nstream\n`), compressed, Buffer.from('\nendstream\nendobj\n%%EOF')]);
   assert.ok(bomb.length < 140000);
   assert.throws(() => validateBytes(bomb, 'application/pdf'), { status: 415 });
   assert.deepEqual(assetDescription({ mime: 'application/pdf', name: 'untrusted.pdf' }, bomb), { mime: 'application/pdf', name: 'untrusted.pdf', length: bomb.length, preview: false });
   const fake = http.createServer((req, res) => {
+    if (!desktop.accept(req, res)) return;
     if (req.url === '/api/system/info') res.end('{"runtime":"desktop"}');
     else if (req.url === '/api/session/ses_A') res.end(JSON.stringify({ data: { id: 'ses_A', location: { directory: '/fixture' } } }));
     else if (req.url === '/api/session/ses_A/message/msg_A') res.end(JSON.stringify({ data: { id: 'msg_A', type: 'user', files: [{ name: 'untrusted.pdf', mime: 'application/pdf', data: bomb.toString('base64') }] } }));
     else { res.writeHead(404); res.end('{}'); }
   });
   fake.listen(0, '127.0.0.1'); await once(fake, 'listening');
-  const bridge = createBridge({ credentials: { device: () => ({ deviceID: 'device', sessionID: 'ses_A', generation: 'one', mode: 'explicit' }) }, discover: () => fake.address().port });
+  const desktop = syntheticDesktop(t, fake);
+  const bridge = createBridge({ credentials: { device: () => ({ deviceID: 'device', sessionID: 'ses_A', generation: 'one', mode: 'explicit' }) }, discover: () => fake.address().port, ocClient: desktop.ocClient });
   bridge.listen(0, '127.0.0.1'); await once(bridge, 'listening');
   const url = `http://127.0.0.1:${bridge.address().port}/floating-voice/v1/sessions/ses_A/assets/`;
   const headers = { Authorization: 'Bearer fixture', 'X-FV-Generation': 'one', 'Content-Type': 'application/json' };
@@ -122,18 +148,19 @@ test('synthetic Canvas tool association only, never arbitrary content or pinned 
   assert.throws(() => canvasAssociation(record, 1));
   record.content[0].name = 'webfetch'; assert.throws(() => canvasAssociation(record, 0));
 });
-test('HTTP assets revalidate message and lease on delivery, never forward phone credentials', async () => {
+test('HTTP assets revalidate message and lease on delivery, never forward phone credentials', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'fv-rich-http-'));
   let generation = 'one', changed = false;
   const fake = http.createServer((req, res) => {
-    assert.equal(req.headers.authorization, undefined);
+    if (!desktop.accept(req, res)) return;
     if (req.url === '/api/system/info') res.end(JSON.stringify({ runtime: 'desktop' }));
     else if (req.url === '/api/session/ses_A') res.end(JSON.stringify({ data: { id: 'ses_A', location: { directory } } }));
     else if (req.url === '/api/session/ses_A/message/msg_A') res.end(JSON.stringify({ id: 'msg_A', type: 'user', files: [{ mime: 'image/png', data: changed ? pdf.toString('base64') : png.toString('base64') }] }));
     else { res.writeHead(404); res.end('{}'); }
   });
   fake.listen(0, '127.0.0.1'); await once(fake, 'listening');
-  const bridge = createBridge({ credentials: { device: auth => { if (auth !== 'Bearer fixture') throw Object.assign(Error(), { status: 401 }); return { deviceID: 'device', sessionID: 'ses_A', generation, mode: 'explicit' }; } }, discover: () => fake.address().port });
+  const desktop = syntheticDesktop(t, fake);
+  const bridge = createBridge({ credentials: { device: auth => { if (auth !== 'Bearer fixture') throw Object.assign(Error(), { status: 401 }); return { deviceID: 'device', sessionID: 'ses_A', generation, mode: 'explicit' }; } }, discover: () => fake.address().port, ocClient: desktop.ocClient });
   bridge.listen(0, '127.0.0.1'); await once(bridge, 'listening');
   const base = `http://127.0.0.1:${bridge.address().port}/floating-voice/v1/sessions/ses_A/assets/`;
   const headers = { Authorization: 'Bearer fixture', 'X-FV-Generation': 'one', 'Content-Type': 'application/json' };
@@ -148,11 +175,11 @@ test('HTTP assets revalidate message and lease on delivery, never forward phone 
   } finally { bridge.shutdown(); fake.closeAllConnections(); await new Promise(r => fake.close(r)); fs.rmSync(directory, { recursive: true }); }
 });
 
-test('Canvas broker binds UUID to message/block/tool origin, filters history and retains uncertain delivery', async () => {
+test('Canvas broker binds UUID to message/block/tool origin, filters history and retains uncertain delivery', async t => {
   let generation = 'one', latest = 1, sessionKey = 'sessionA', uncertain = false, dispatches = 0, interactions = [], toolID = 'toolA';
   const document = { title: 'Fixture', diagram: { nodes: [{ id: 'a', label: 'A', detail: '' }, { id: 'b', label: 'B', detail: '' }], edges: [{ from: 'a', to: 'b', label: 'next' }] }, sections: [], choices: [{ id: 'go', label: 'Go', description: 'Fixture only', prompt: 'Never sent to a real session' }] };
   const fake = http.createServer(async (req, res) => {
-    assert.equal(req.headers.authorization, undefined);
+    if (!desktop.accept(req, res)) return;
     if (req.url === '/api/system/info') { res.end(JSON.stringify({ runtime: 'desktop' })); return; }
     if (req.url === '/api/session/ses_A') { res.end(JSON.stringify({ data: { id: 'ses_A', location: { directory: '/fixture' } } })); return; }
     if (/^\/api\/session\/ses_A\/message\/msg_[AB]$/.test(req.url)) {
@@ -180,7 +207,8 @@ test('Canvas broker binds UUID to message/block/tool origin, filters history and
     res.end(JSON.stringify({ status: 200, body: JSON.stringify(result) }));
   });
   fake.listen(0, '127.0.0.1'); await once(fake, 'listening');
-  const bridge = createBridge({ credentials: { device: () => ({ deviceID: 'deviceA', sessionID: 'ses_A', generation, mode: 'explicit' }) }, discover: () => fake.address().port });
+  const desktop = syntheticDesktop(t, fake);
+  const bridge = createBridge({ credentials: { device: () => ({ deviceID: 'deviceA', sessionID: 'ses_A', generation, mode: 'explicit' }) }, discover: () => fake.address().port, ocClient: desktop.ocClient });
   bridge.listen(0, '127.0.0.1'); await once(bridge, 'listening');
   const base = `http://127.0.0.1:${bridge.address().port}/floating-voice/v1/sessions/ses_A/canvas/`;
   const call = (action, body, gen = generation) => fetch(base + action, { method: 'POST', headers: { Authorization: 'Bearer fixture', 'X-FV-Generation': gen, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -222,15 +250,17 @@ test('Canvas broker binds UUID to message/block/tool origin, filters history and
   } finally { bridge.shutdown(); fake.closeAllConnections(); await new Promise(r => fake.close(r)); }
 });
 
-test('cancelled rich-asset authority lookup closes upstream before any capability delivery', async () => {
+test('cancelled rich-asset authority lookup closes upstream before any capability delivery', async t => {
   let signalStart, signalClose;
   const started = new Promise(r => { signalStart = r; }), closed = new Promise(r => { signalClose = r; });
   const fake = http.createServer((req, res) => {
+    if (!desktop.accept(req, res)) return;
     if (req.url === '/api/system/info') { res.end('{"runtime":"desktop"}'); return; }
     res.on('close', signalClose); res.writeHead(200); res.write('{'); signalStart();
   });
   fake.listen(0, '127.0.0.1'); await once(fake, 'listening');
-  const bridge = createBridge({ credentials: { device: () => ({ deviceID: 'device', sessionID: 'ses_A', generation: 'one', mode: 'explicit' }) }, discover: () => fake.address().port });
+  const desktop = syntheticDesktop(t, fake);
+  const bridge = createBridge({ credentials: { device: () => ({ deviceID: 'device', sessionID: 'ses_A', generation: 'one', mode: 'explicit' }) }, discover: () => fake.address().port, ocClient: desktop.ocClient });
   bridge.listen(0, '127.0.0.1'); await once(bridge, 'listening');
   const controller = new AbortController();
   try {

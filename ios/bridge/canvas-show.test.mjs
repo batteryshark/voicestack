@@ -4,6 +4,7 @@ import http from 'node:http';
 import { once } from 'node:events';
 import { canvasShowAssociation, canvasAssociation, phoneProjection, showRevision } from './rich-content.mjs';
 import { createBridge } from './server.mjs';
+import { unpairedDesktop } from './fixtures/synthetic-desktop.mjs';
 
 const viewId = '11111111-1111-4111-8111-111111111111';
 export const record = { id: 'msg_A', type: 'assistant', content: [
@@ -77,7 +78,7 @@ test('show broker isolates revision and input, keeps stable unknown UUID and lea
     res.end(JSON.stringify({ status: 200, body: JSON.stringify(result) }));
   });
   fake.listen(0, '127.0.0.1'); await once(fake, 'listening');
-  const bridge = createBridge({ credentials: { device: () => ({ deviceID: 'fixture', sessionID: 'ses_A', generation, mode: 'explicit' }) }, discover: () => fake.address().port });
+  const bridge = createBridge({ credentials: { device: () => ({ deviceID: 'fixture', sessionID: 'ses_A', generation, mode: 'explicit' }) }, ...unpairedDesktop(t, fake) });
   bridge.listen(0, '127.0.0.1'); await once(bridge, 'listening');
   const base = `http://127.0.0.1:${bridge.address().port}/floating-voice/v1/sessions/ses_A/canvas-show/`;
   const call = (op, obj, gen = generation) => fetch(base + op, { method: 'POST', headers: { Authorization: 'Bearer fixture', 'X-FV-Generation': gen, 'Content-Type': 'application/json' }, body: JSON.stringify(obj) });

@@ -5,7 +5,7 @@ import OSLog
 /// A launch-only harness around the real model/controller, never a second voice loop.
 @MainActor final class PhoneLoopProbe {
     static let shared = PhoneLoopProbe()
-    static let target = "ses_example0000000000000000000"
+    static let target = "ses_SYNTHETIC0017"
     nonisolated static var enabled: Bool { ProcessInfo.processInfo.arguments.contains("-FVPhoneLoopProbe") }
     static var lockedMode: Bool { ProcessInfo.processInfo.arguments.contains("-FVLockedCallProbe") }
     static let showHistory = Notification.Name("FVPhoneLoopHistory")

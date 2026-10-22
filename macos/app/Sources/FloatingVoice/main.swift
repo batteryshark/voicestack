@@ -160,14 +160,6 @@ final class VoiceModel {
         }
     }
 
-    func toggleVoice() {
-        if controller.status.running { controller.endVoice() }
-        else {
-            audioDiagnostics.beginVoiceRun()
-            Task { await controller.start() }
-        }
-    }
-
     func diagnose(_ stage: AudioLifecycleDiagnostics.Stage) {
         audioDiagnostics.record(stage, audio: audio, active: controller.speaker.active, busy: controller.status.busy, queued: controller.speaker.queuedCount)
     }
@@ -280,15 +272,10 @@ final class PanelController {
 
     init(model: VoiceModel) {
         self.model = model
-        var actions = PillActions()
+        var actions = PillActions.conversation(controller: model.controller,
+            willStart: { [weak model] in model?.audioDiagnostics.beginVoiceRun() },
+            willStopReply: { [weak model] in model?.diagnose(.stopEntry) })
         let pill = model.pill
-        actions.toggleVoice = { [weak model] in model?.toggleVoice() }
-        actions.toggleMic = { [weak model] in guard let c = model?.controller else { return }; c.setMicMuted(!c.status.micMuted) }
-        actions.toggleOutput = { [weak model] in guard let c = model?.controller else { return }; c.setOutputMuted(!c.status.outputMuted) }
-        actions.startVoice = { [weak model] in guard let m = model, !m.controller.status.running else { return }; m.toggleVoice() }
-        actions.stopReply = { [weak model] in model?.diagnose(.stopEntry); Task { await model?.controller.stopReply() } }
-        actions.send = { [weak model] in model?.controller.send() }
-        actions.discard = { [weak model] in model?.controller.discardPending() }
         panel.discardIfEligible = { [weak model] in
             guard let model, !model.pill.settingsOpen, model.controller.status.pendingSpeech else { return false }
             model.controller.discardPending()

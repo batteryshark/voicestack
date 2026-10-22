@@ -8,8 +8,8 @@ for (const row of rows) test(row.name, () => {
   const config = { ...CONFIG, deploymentSuffix: row.deploymentSuffix, approvedManifests: row.approvedManifests };
   assert.equal(manifestAllowed(row.url, config), row.expected);
   const value = { id: 'fixture', kind: 'ready-to-try', reason: 'install', session: 'ses_fixture', title: 'Fixture', body: 'Synthetic build', url: row.url };
-  if (row.expected) assert.doesNotThrow(() => sendSchema(value, config));
-  else assert.throws(() => sendSchema(value, config));
+  // Legacy manifest validation stays testable, but Voicestack no longer sends alerts.
+  assert.throws(() => sendSchema(value, config));
 });
 test('default denies and malformed typed config fails closed', () => {
   assert.equal(manifestAllowed(rows[1].url), false);

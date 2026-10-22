@@ -15,7 +15,7 @@ public final class SettingsState: ObservableObject {
     @Published public var serverDefaultVoice: String?
     @Published public var inputs: [Choice] = []
     @Published public var outputs: [Choice] = []
-    /// The server's sessions, most recent first, as "Title · a10001".
+    /// The server's sessions, most recent first, as "Title · SYNTHE".
     @Published public var sessions: [Choice] = []
     /// Where "the chief" comes from now: chief.json or the latest "Chief of staff" session.
     @Published public var chiefSource = "chief.json"

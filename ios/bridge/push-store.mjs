@@ -31,4 +31,7 @@ export class PushStore {
       if (created) { try { fs.unlinkSync(tmp); } catch (e) { if (e.code !== 'ENOENT') throw e; } }
     }
   }
+  openVoice() {
+    return this.data.openVoice ??= { grants: {}, mappings: {}, calls: {}, capabilities: {} };
+  }
 }

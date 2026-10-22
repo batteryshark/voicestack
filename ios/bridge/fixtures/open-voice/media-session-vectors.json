@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "profile": "open-voice-m1-ga-ws/1",
+  "synthetic_only": true,
+  "path": "/floating-voice/v1/realtime?model=local-chain-m1",
+  "startup": ["session.created", "session.updated", "vs.flow"],
+  "initial_flow": {"type":"vs.flow","media_epoch":"1","input_consumed_samples":0},
+  "recognition_success": ["input_audio_buffer.committed","conversation.item.added","conversation.item.done","conversation.item.input_audio_transcription.completed"],
+  "audio_response": ["response.created","response.output_item.added","conversation.item.added","response.content_part.added","response.output_audio_transcript.delta","response.output_audio.delta","response.output_audio.done","response.output_audio_transcript.done","response.content_part.done","response.output_item.done","conversation.item.done","response.done"],
+  "bounds": {"maxAdapterJobs":8,"maxPendingUpgrades":4,"maxQueuedEvents":32,"maxQueuedJSONBytes":128000,"maxEventsPerSecond":200,"stallMs":15000,"authorityMs":1000,"closeMs":250,"pongMs":30000,"pingAfterMs":10000,"maxItems":256},
+  "fake_result": {"admission_inbox_id":"msg_fixture_inbox","source_user_id":"user_fixture","source_assistant_id":"assistant_fixture","text":"Synthetic reply."},
+  "reconciliation": "Recorded terminal response.done reuses response_id and operation_id with output:[]; nonterminal/uncertain admission uses control operation GET, not an invented GA status. Never replay audio or submit again.",
+  "evidence_boundary": "Fake source IDs are explicit fixture lineage only; no real harness inbox-to-transcript/assistant attribution is established. Native readiness is a report, not capture proof. Generation is not rendered playback."
+}

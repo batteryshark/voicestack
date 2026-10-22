@@ -86,6 +86,10 @@ public enum CaptureField: String, Sendable {
     case diagnosticsDropped
     case renderInvalidBuffers
     case startLatencyMs
+    case openVoiceFailureOrigin, openVoiceAdmittedSamples, openVoiceSentSamples, openVoiceConsumedSamples
+    case openVoiceMediaCloseOrigin, openVoiceClientFailed, openVoiceMediaEpoch
+    case candidateInputFailure, candidateProducedFrames, candidateDeliveredFrames, candidateReceivedFrames
+    case candidateEligibleFrames, candidateVADOnsets, candidatePeakRMS, candidateVADThreshold
 }
 public struct CaptureSnapshot: Codable, Sendable {
     public let values: [String: Double]
@@ -145,7 +149,7 @@ public final class StageDiagnostics: @unchecked Sendable {
     private var diagnosticCall = 0
     private let playbackTagLock = NSLock()
     private var playbackTag = 0, playbackDropped = 0
-    private let playbackQueue = DispatchQueue(label: "org.example.playback-diagnostics", qos: .utility)
+    private let playbackQueue = DispatchQueue(label: "org.example.voicestack.playback-diagnostics", qos: .utility)
     private let playbackSlots = DispatchSemaphore(value: 128)
     private var destination: URL?
     private var protectedData = true

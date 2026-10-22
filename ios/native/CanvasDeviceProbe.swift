@@ -2,8 +2,8 @@ import SwiftUI
 
 /// Explicit launch-only inspection of the principal-owned throwaway. Never sends input itself.
 enum CanvasDeviceProbe {
-    static let session = "ses_example0000000000000000000"
-    static let message = "msg_synthetic0001"
+    static let session = "ses_SYNTHETIC0017"
+    static let message = "msg_SYNTHETIC0003"
     static let view = "a513aa2d-c796-47e2-a4cf-6dea84ff9e53"
     static var enabled: Bool { ProcessInfo.processInfo.arguments.contains("-FVCanvas25Probe") }
     @MainActor static func run(_ model: PhoneModel) async {
@@ -16,7 +16,7 @@ enum CanvasDeviceProbe {
                       hasBackend: model.backend != nil, hasCall: model.hasCall)
             }) {
                 let context = try ReachOutContext(record: ["reachoutID": "canvas25-probe", "session": session, "messageID": message, "expiry": Date().addingTimeInterval(300).timeIntervalSince1970 * 1000], reachoutID: "canvas25-probe")
-                try await model.openReachOut(context, reviewBuild: false)
+                try await model.openReachOut(context)
             }
             if routed { model.canvasProbeReady = true }
         } catch {

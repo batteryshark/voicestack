@@ -42,7 +42,7 @@ func require23(_ ok: Bool, _ message: String) throws {
 func clean23(_ value: Any) throws {
     let bytes = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
     let text = String(decoding: bytes, as: UTF8.self)
-    for denied in ["SYNTHETIC_VIEWER_TOKEN", "SYNTHETIC_WRAPPED_TOKEN", "host-19.example.ts.net", "opaque-viewer.fixture.invalid", "DO_NOT_PROJECT_SOURCE", "OTHER_SESSION_SECRET"] {
+    for denied in ["SYNTHETIC_VIEWER_TOKEN", "SYNTHETIC_WRAPPED_TOKEN", "unlearned.fixture.ts.net", "opaque-viewer.fixture.invalid", "DO_NOT_PROJECT_SOURCE", "OTHER_SESSION_SECRET"] {
         try require23(!text.contains(denied), "Projection leaked synthetic sentinel: " + denied)
     }
 }

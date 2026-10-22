@@ -230,7 +230,7 @@ public final class PillModel: ObservableObject {
             note("posted: \(text)")
             expand("sent")
             refreshWait()
-        case .chiefQueued(let label, let text):
+        case .chiefQueued(let label, let text), .chiefFinalReceived(let label, let text):
             if label != replyLabel { replyLabel = label; received = [] }
             received.append(text)
             chiefSeen = true

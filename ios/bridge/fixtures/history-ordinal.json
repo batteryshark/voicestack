@@ -1,13 +1,58 @@
 {
   "data": [
     {
-      "id": "msg_freshOrdinalAnswer01",
+      "id": "msg_idle",
+      "type": "idle",
+      "outcome": "success",
+      "time": {
+        "created": 2001
+      }
+    },
+    {
+      "id": "msg_offline",
       "type": "assistant",
-      "time": {"created": 1000, "completed": 2000},
+      "time": {
+        "created": 1000,
+        "completed": 2000
+      },
       "content": [
-        {"type": "reasoning", "text": "Fictional reasoning block for ordinal alignment only."},
-        {"type": "text", "text": "The fictional paper kite is ready."}
-      ]
+        {
+          "type": "reasoning",
+          "text": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr## Offline reply\n\n- A synthetic point.\n\n| Option | Length |\n| --- | --- |\n| Example | 2 km |\n\n```text\nPack: synthetic items\n```\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "state": {
+            "reasoningField": "reasoning"
+          },
+          "time": {
+            "created": 1200,
+            "completed": 1900
+          }
+        },
+        {
+          "type": "text",
+          "text": "## Offline reply\n\n- A synthetic point.\n\n| Option | Length |\n| --- | --- |\n| Example | 2 km |\n\n```text\nPack: synthetic items\n```\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ],
+      "snapshot": {
+        "start": "synthetic",
+        "end": "synthetic",
+        "files": []
+      },
+      "model": {
+        "providerID": "synthetic",
+        "id": "synthetic"
+      }
+    },
+    {
+      "id": "msg_user",
+      "type": "user",
+      "text": "Synthetic ask only.",
+      "time": {
+        "created": 999
+      }
     }
-  ]
+  ],
+  "cursor": {
+    "previous": null,
+    "next": null
+  }
 }

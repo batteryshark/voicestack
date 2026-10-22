@@ -1,0 +1,9 @@
+{
+  "name": "voicestack-private-harness-runtime",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@opencode/sdk": "2.0.32",
+    "@opencode/core": "2.0.32"
+  }
+}

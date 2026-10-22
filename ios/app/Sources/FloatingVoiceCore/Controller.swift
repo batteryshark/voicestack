@@ -1,5 +1,9 @@
 import Foundation
 
+public enum CandidateInputFailure: Int {
+    case captureStalled = 1, deliveryStalled = 2, admissionGateStalled = 3, recognitionAdmissionStalled = 4, readinessStalled = 5
+}
+
 /// Another process capturing microphone input right now.
 public struct MicHolder: Equatable, Sendable {
     public let pid: Int32
@@ -39,6 +43,9 @@ public enum CaptionEvent: Equatable, Sendable {
     case discarded(String)
     /// A reply sentence was received (queued for speech, or dropped while the agent voice is muted).
     case chiefQueued(label: String, text: String)
+    /// Verified final candidate text, readable independently of audio. NOT started,
+    /// played, rendered samples, or permission to synthesize the received text.
+    case chiefFinalReceived(label: String, text: String)
     case chiefStarted(label: String, text: String)
     case chiefEnded(label: String, text: String, outcome: String)
     /// Audio could not finish; keep the complete reply readable rather than hiding lost speech.
@@ -192,12 +199,14 @@ public final class ConversationController {
         public var holding: String?
         /// Manual send mode: words wait for the Send button or hotkey.
         public var manualSend = false
+        public var newConversation = false
 
         public init() {}
         init(lastError: String?, notice: String?) { self.lastError = lastError; self.notice = notice }
 
-        /// "Chief of staff · a10001": the title and a short id, so the header never just says "Chief".
+        /// "Chief of staff · SYNTHE": the title and a short id, so the header never just says "Chief".
         public var targetLabel: String? {
+            if newConversation { return "New conversation" }
             guard let target else { return nil }
             let title = (targetTitle?.isEmpty == false) ? targetTitle! : "Session"
             return "\(title) · \(SessionSummary.shortID(target))"
@@ -205,6 +214,7 @@ public final class ConversationController {
 
         /// "Title (ses_…)" or the id.
         public var targetName: String? {
+            if newConversation { return "New conversation" }
             guard let target else { return nil }
             if let t = targetTitle, !t.isEmpty { return "\(t) (\(target))" }
             return target
@@ -229,6 +239,11 @@ public final class ConversationController {
 
     public private(set) var status = Status() { didSet { if status != oldValue { onStatus?(status) } } }
     public var onStatus: ((Status) -> Void)?
+    /// Authoritative execution events only; optimistic busy and HTTP wait are not processing.
+    public var onAgentProcessing: ((Bool) -> Void)?
+    /// Fatal candidate capture-path loss, never silence/mute/hold or work activity.
+    public var onCandidateInputFailure: ((CandidateInputFailure) -> Void)?
+    public var onCandidateTerminalFailure: ((CallEndCause) -> Void)?
     public var onPrivateNotice: ((PrivateVoiceNotice) -> Void)?
     public var outcomeDiagnostics = UtteranceOutcomeLog.shared
     /// Captions and levels for the pill (PillModel).
@@ -266,6 +281,16 @@ public final class ConversationController {
     private var pollTask: Task<Void, Never>?
     private var acceptInput = false
     private var capturePrepared = false
+    private var candidateInputTask: Task<Void,Never>?
+    private let candidateDiagnosticCall = StageDiagnostics.shared.playbackCallToken
+    private var candidateReceived = 0, candidateEligible = 0, candidateOnsets = 0
+    private var candidatePeakRMS = 0.0
+    private var candidateOnset: (samples: Int, at: Double)?
+    private struct InputWatch {
+        var produced: Int, received: Int, eligible: Int
+        var producedAt: Double, receivedAt: Double, eligibleAt: Double, readyAt: Double
+    }
+    private var candidateInputWatch: InputWatch?
     private var liveAt = 0.0
     private var bargeArmed = false
     public var onEchoActivity: ((Bool) -> Void)? // false = VAD onset; true = actual barge-in, no text
@@ -289,6 +314,15 @@ public final class ConversationController {
     private var ownerEpoch = 0
     private var draftEpoch = 0
     private var callPaused = false
+    private struct CandidateDisplayOwner: Equatable {
+        let target: TargetLease
+        let media: OpenVoiceMediaFence
+        let epoch: UUID
+    }
+    private var candidateDisplayOwner: CandidateDisplayOwner?
+    private var candidateFinal: (item: String, text: String)?
+    private var candidateCaptureRevoked = false
+    private var candidateTerminalFailureReported = false
     private var submissionEpoch = 0
     private var speechEpoch = 0 { didSet { discardUtteranceOutcomes() } }
     private var inputOutcomeOrdinal = 0
@@ -352,8 +386,65 @@ public final class ConversationController {
             }
         }
         if let routes = input as? DuplexReporting {
-            routes.onDuplexChange = { [weak self] in self?.refreshDuplexPolicy() }
+            routes.onDuplexChange = { [weak self] in
+                self?.refreshDuplexPolicy(); self?.updateCandidateCaptureReadiness()
+            }
         }
+        if let candidate = backend as? OpenVoiceBackend {
+            let displayOwner = CandidateDisplayOwner(target:candidate.target,media:candidate.pump.fence,epoch:UUID())
+            candidateDisplayOwner = displayOwner
+            candidate.onMediaClosed = { [weak self] in
+                guard let self else { return }
+                self.revokeCandidateCapture()
+                self.reportCandidateTerminalFailure()
+            }
+            app.target = candidate.target.sessionID; app.sendMode = .manual
+            status.newConversation = true
+            candidate.onPrepared = { [weak self, weak candidate] ticket,label in
+                guard let self, self.status.running || self.callPaused else { ticket.cancel(); return }
+                guard !self.status.outputMuted && !self.status.narrationPaused else { ticket.cancel(); try? candidate?.cancelNarration(); return }
+                self.speaker.enqueuePrepared(ticket,label:label)
+            }
+            candidate.onFinalProjection = { [weak self, weak candidate] label,text in
+                guard let self, let candidate, self.status.running || self.callPaused,
+                      self.backend === candidate, self.candidateDisplayOwner == displayOwner,
+                      candidate.target == displayOwner.target, candidate.pump.fence == displayOwner.media else { return }
+                // One immutable final for this call/display owner and item. Neither
+                // Hold's cleared capture lease nor empty audio callbacks own display.
+                if self.candidateFinal != nil { return }
+                self.candidateFinal = (label,text)
+                self.onCaption?(.chiefFinalReceived(label:label,text:text))
+            }
+            candidate.onFailure = { [weak self] _ in
+                self?.fail("Voice connection lost; review without replay")
+                self?.stop(discardUnfinished:true)
+            }
+        }
+    }
+    private func updateCandidateCaptureReadiness() {
+        guard let candidate = backend as? OpenVoiceBackend else { return }
+        candidate.nativeCaptureChanged(status.running && capturePrepared && (input as? DuplexReporting)?.captureGraphReady == true)
+        refreshReadiness()
+    }
+    private func revokeCandidateCapture() {
+        guard !candidateCaptureRevoked else { return }
+        candidateCaptureRevoked = true; candidateDisplayOwner = nil
+        // Fence before input/output callbacks can reenter. This is not End/Send,
+        // does not interrupt harness work, and retains only owner-bound review.
+        if status.running { suspendForReview() }
+        else { input?.onPCM = nil; input?.stop() }
+        stop(discardUnfinished:true)
+    }
+    private func reportCandidateTerminalFailure() {
+        guard !candidateTerminalFailureReported, let candidate = backend as? OpenVoiceBackend else { return }
+        let cause: CallEndCause
+        switch candidate.mediaCloseOrigin {
+        case .clientFailure?, .backendFailure?: cause = .backendFailure
+        case .streamEnd?: cause = .mediaFailure
+        default: return // Intentional stop/Hold/End/revocation/shutdown is not a new media fault.
+        }
+        candidateTerminalFailureReported = true
+        onCandidateTerminalFailure?(cause)
     }
 
     private func makeSpeaker() -> Speaker {
@@ -364,7 +455,8 @@ public final class ConversationController {
         }
         s.onChange = { [weak self] in
             guard let self else { return }
-            self.status.speaking = self.speaker.active
+            self.status.speaking = self.speaker.active && !self.speaker.isHolding
+            if self.backend is OpenVoiceBackend { self.resetCandidateInputWatch() }
             self.refreshDuplexPolicy()
         }
         s.onSentence = { [weak self] label, text in
@@ -400,7 +492,7 @@ public final class ConversationController {
                                           self.deferredPosts.remove(id)
                                           self.deferredOutcomes[id] = nil
                                           guard self.submissionEpoch == submission else { self.refreshPendingSpeech(); self.quarantine(text, target: target, outcome: outcome); return }
-                                          VoiceTrace.shared.event("composer.posted", ["text": text])
+                                           if !(self.backend is OpenVoiceBackend) { VoiceTrace.shared.event("composer.posted", ["text": text]) }
                                           self.onCaption?(.posted(text))
                                           self.refreshPendingSpeech()
                                           await self.post(text, kind: kind, reason: reason, to: target, outcome: outcome)
@@ -427,7 +519,7 @@ public final class ConversationController {
     private func beginUtteranceOutcome() {
         inputOutcomeOrdinal += 1
         let record = UtteranceOutcomeRecord(ordinal: inputOutcomeOrdinal, call: outcomeDiagnostics.callToken(),
-            diagnostics: outcomeDiagnostics, beganDuringPlayback: speaker.playing && !halfDuplex)
+            diagnostics: outcomeDiagnostics, beganDuringPlayback: speaker.playingReply && !halfDuplex)
         utteranceOutcome = record
         if record.policy.onset == .duck { speaker.duckForAutomaticCutIn(true) }
     }
@@ -444,12 +536,13 @@ public final class ConversationController {
     }
     private func observeAutomaticInterim(_ text: String) {
         guard let record = utteranceOutcome, !record.resolved, !halfDuplex else { return }
-        let action = record.policy.interim(text, playbackActive: speaker.playing)
+        // Hold music and pickup cues are never interruptible Chief speech.
+        let action = record.policy.interim(text, playbackActive: speaker.playingReply)
         applyAutomaticCutIn(action, record: record)
     }
     private func observeAutomaticVoice(_ milliseconds: Double) {
         guard let record = utteranceOutcome, !record.resolved, !halfDuplex else { return }
-        let action = record.policy.voiced(milliseconds, playbackActive: speaker.playing)
+        let action = record.policy.voiced(milliseconds, playbackActive: speaker.playingReply)
         applyAutomaticCutIn(action, record: record)
     }
     private func applyAutomaticCutIn(_ action: AutomaticCutInDecision.Action, record: UtteranceOutcomeRecord) {
@@ -693,7 +786,7 @@ public final class ConversationController {
 
     /// Both independently asynchronous gates must belong to this run before PCM is admitted.
     private func refreshReadiness() {
-        let ready = status.running && capturePrepared && currentLease?.sessionID == status.target && currentLease != nil && status.connection == "connected"
+        let ready = status.running && capturePrepared && currentLease?.sessionID == status.target && currentLease != nil && status.connection == "connected" && ((backend as? OpenVoiceBackend)?.ready ?? true)
         acceptInput = ready
         status.phase = ready ? "ready" : "starting"
     }
@@ -735,6 +828,7 @@ public final class ConversationController {
     }
 
     public func start(micMuted: Bool = false, outputMuted: Bool = false) async {
+        if (backend as? OpenVoiceBackend)?.mediaClosed == true { revokeCandidateCapture(); return }
         guard !status.running else { return }
         // Set gates before connection tasks, capture or narration can be admitted. No mute side effects.
         status.micMuted = micMuted
@@ -752,9 +846,12 @@ public final class ConversationController {
         runEpoch += 1
         let epoch = runEpoch
         capturePrepared = false; acceptInput = false
+        candidateReceived = 0; candidateEligible = 0; candidateOnsets = 0; candidatePeakRMS = 0
+        candidateOnset = nil; candidateInputWatch = nil
         playbackQuietUntil = 0; playbackWasPlaying = false; wasCaptureSuppressed = false
         lastPlaybackEndedAt = -Double.infinity
         playbackInputLevel = nil; tailMeasureStartedAt = nil; tailMeasureFrames = 0
+        status.newConversation = backend is OpenVoiceBackend
         status.running = true
         status.manualSend = app.sendMode == .manual
         // keepHeld restarts must expose the retained thought throughout startup, not just in apply's tail.
@@ -861,8 +958,14 @@ public final class ConversationController {
         turnTaker = TurnTaker(config: voice, callbacks: callbacks, makeRecognition: makeRecognition)
         turnTaker?.now = now
         input.onPCM = { [weak self] pcm in
-            guard let self, self.runEpoch == epoch, self.acceptInput, !self.status.micMuted, self.currentLease != nil else { return }
-            if ProcessInfo.processInfo.arguments.contains("-FVVoiceTurnProbe"), self.currentLease?.sessionID != "ses_example0000000000000000000" { return }
+            guard let self, self.runEpoch == epoch, self.status.running else { return }
+            if self.backend is OpenVoiceBackend {
+                self.candidateReceived += pcm.count / 640
+                self.candidatePeakRMS = max(self.candidatePeakRMS, TurnTaker.rms(pcm))
+            }
+            guard self.acceptInput, !self.status.micMuted, self.currentLease != nil,
+                  (self.backend as? OpenVoiceBackend)?.ready ?? true else { return }
+            if ProcessInfo.processInfo.arguments.contains("-FVVoiceTurnProbe"), self.currentLease?.sessionID != "ses_SYNTHETIC0017" { return }
             self.refreshDuplexPolicy()
             let origin = self.input as? CaptureOriginReporting
             let rms = TurnTaker.rms(pcm)
@@ -883,6 +986,7 @@ public final class ConversationController {
             }
             self.micStats.add(pcm, threshold: self.turnTaker?.threshold ?? self.voice.threshold, playing: self.speaker.playing, ignored: ignore)
             if ignore { return }
+            if self.backend is OpenVoiceBackend { self.candidateEligible += pcm.count / 640 }
             if let onCaption = self.onCaption { onCaption(.micLevel(TurnTaker.rms(pcm))) }
             self.turnTaker?.push(pcm)
             self.refreshDuplexPolicy() // guard release is driven by the actual 20ms frames
@@ -894,6 +998,9 @@ public final class ConversationController {
         }
         do {
             try await input.start()
+            if (backend as? OpenVoiceBackend)?.mediaClosed == true {
+                input.stop(); preflightTask.cancel(); partialsTask?.cancel(); return
+            }
             guard runEpoch == epoch, status.running else { preflightTask.cancel(); partialsTask?.cancel(); return }
             log("self-check ok: microphone open and sending audio")
         } catch {
@@ -918,6 +1025,8 @@ public final class ConversationController {
         micStats = MicStats()
         liveAt = now()
         capturePrepared = true; refreshReadiness()
+        updateCandidateCaptureReadiness()
+        startCandidateInputWatch(epoch:epoch)
         if callPaused { callPaused = false; speaker.resume() }
         log(acceptInput ? "ready: mic live" : "preparing: waiting for session authority")
         log("voice policy: pauseMs=\(voice.pauseMs), sensitivity=\(voice.sensitivity), turnEndQuietMs=\(app.turnEndQuietMs), finalTimeout=8s")
@@ -926,9 +1035,64 @@ public final class ConversationController {
         }
     }
 
+    private func resetCandidateInputWatch() {
+        guard let progress = (input as? CaptureProgressReporting)?.captureProgress else { return }
+        let t = now()
+        candidateInputWatch = InputWatch(produced:progress.producedFrames, received:candidateReceived, eligible:candidateEligible,
+            producedAt:t, receivedAt:t, eligibleAt:t, readyAt:t)
+        candidateOnset = nil
+    }
+    private func startCandidateInputWatch(epoch: Int) {
+        guard backend is OpenVoiceBackend, input is CaptureProgressReporting else { return }
+        resetCandidateInputWatch(); candidateInputTask?.cancel()
+        candidateInputTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds:500_000_000) } catch { return }
+                guard let self, self.runEpoch == epoch, self.status.running else { return }
+                self.checkCandidateInputProgress()
+            }
+        }
+    }
+    // Shared with the headless production-order regression; does not admit PCM.
+    func checkCandidateInputProgress() {
+        guard let candidate = backend as? OpenVoiceBackend, !candidate.mediaClosed,
+              status.running, capturePrepared, let progress = (input as? CaptureProgressReporting)?.captureProgress else { return }
+        // These are intentional non-listening states. Re-arm from the current
+        // owner/progress when they end; never charge their duration to failure.
+        if callPaused || status.micMuted || status.busy || status.sending || speaker.active || hardCaptureSuppressed {
+            resetCandidateInputWatch(); return
+        }
+        guard var watch = candidateInputWatch else { resetCandidateInputWatch(); return }
+        let t = now()
+        if progress.producedFrames != watch.produced { watch.producedAt = t; watch.produced = progress.producedFrames }
+        if candidateReceived != watch.received { watch.receivedAt = t; watch.received = candidateReceived }
+        if candidateEligible != watch.eligible { watch.eligibleAt = t; watch.eligible = candidateEligible }
+        if status.phase == "ready" && candidate.ready { watch.readyAt = t }
+        if let onset = candidateOnset, candidate.pump.client.admittedSamples > onset.samples { candidateOnset = nil }
+        candidateInputWatch = watch
+        let failure: CandidateInputFailure?
+        if t - watch.producedAt >= 5000 { failure = .captureStalled }
+        else if t - watch.receivedAt >= 5000 { failure = .deliveryStalled }
+        else if t - watch.readyAt >= 5000 { failure = .readinessStalled }
+        else if t - watch.eligibleAt >= 5000 { failure = .admissionGateStalled }
+        else if let onset = candidateOnset, t - onset.at >= 5000 { failure = .recognitionAdmissionStalled }
+        else { failure = nil }
+        guard let failure else { return }
+        StageDiagnostics.shared.record(.call,.failed,audio:CaptureSnapshot([
+            .candidateInputFailure:Double(failure.rawValue), .candidateProducedFrames:Double(progress.producedFrames),
+            .candidateDeliveredFrames:Double(progress.deliveredFrames), .candidateReceivedFrames:Double(candidateReceived),
+            .candidateEligibleFrames:Double(candidateEligible), .candidateVADOnsets:Double(candidateOnsets),
+            .candidatePeakRMS:candidatePeakRMS, .candidateVADThreshold:turnTaker?.threshold ?? voice.threshold,
+            .openVoiceAdmittedSamples:Double(candidate.pump.client.admittedSamples)
+        ]),callBank:candidateDiagnosticCall)
+        fail("Microphone input stopped reaching recognition")
+        suspendForReview(); candidate.closeForInputFailure(failure)
+        onCandidateInputFailure?(failure)
+    }
+
     private func runVoiceTurnProbe() async {
         // Never speak into or submit a probe to the chief's real session.
-        guard status.target == "ses_example0000000000000000000", let probe = input as? VoiceTurnProbeInput else { return }
+        guard status.target == "ses_SYNTHETIC0017", let probe = input as? VoiceTurnProbeInput else { return }
         do {
             let deadline = Date().addingTimeInterval(15)
             while !acceptInput {
@@ -1005,6 +1169,7 @@ public final class ConversationController {
     /// Stop voice: release the microphone, stop speech, disconnect. Held words are posted (auto send), or dropped and
     /// logged (manual send: only Send sends). `keepHeld` keeps them held across a restart (device or echo change).
     public func stop(notice: String? = nil, keepHeld: Bool = false, discardUnfinished: Bool = false, preservingNarration: Bool = false) {
+        candidateInputTask?.cancel(); candidateInputTask = nil; candidateInputWatch = nil; candidateOnset = nil
         voiceProbeTask?.cancel(); voiceProbeTask = nil
         guard status.running else {
             if !preservingNarration { callPaused = false; speaker.stop() }
@@ -1028,6 +1193,7 @@ public final class ConversationController {
         runEpoch += 1
         acceptInput = false
         bargeArmed = false
+        (backend as? OpenVoiceBackend)?.controllerWillStop()
         connectionTask?.cancel(); connectionTask = nil
         streamTask?.cancel(); streamTask = nil
         pollTask?.cancel(); pollTask = nil
@@ -1041,6 +1207,8 @@ public final class ConversationController {
             status.running = false; status.hearing = false; status.phase = "starting"
             status.notice = "Call paused · words retained for review"
         } else { status = Status(lastError: status.lastError, notice: notice) }
+        status.newConversation = backend is OpenVoiceBackend
+        updateCandidateCaptureReadiness()
         refreshPendingSpeech()
         log("voice stop\(notice.map { ": \($0)" } ?? "")")
     }
@@ -1048,6 +1216,7 @@ public final class ConversationController {
     public func setMicMuted(_ on: Bool) {
         guard status.micMuted != on else { return }
         status.micMuted = on
+        if backend is OpenVoiceBackend { resetCandidateInputWatch() }
         if on {
             // No new audio is taken from here on (the capture callback checks micMuted). Words already in motion are
             // not thrown away: the utterance in progress ends now and its final text is waited for (8 s at most).
@@ -1072,7 +1241,10 @@ public final class ConversationController {
         log("agent voice muted=\(on)")
     }
 
-    public func setBusyDelivery(_ d: BusyDelivery) { app.busyDelivery = d; log("busyDelivery=\(d.rawValue)") }
+    public func setBusyDelivery(_ d: BusyDelivery) {
+        guard !(backend is OpenVoiceBackend) else { fail("New conversation does not support queue or steer"); return }
+        app.busyDelivery = d; log("busyDelivery=\(d.rawValue)")
+    }
 
     /// Wait (up to `timeout` seconds) for posts in flight to finish, e.g. before the app quits. True if all finished.
     public func waitForPosts(timeout: Double) async -> Bool {
@@ -1093,6 +1265,7 @@ public final class ConversationController {
     /// Send (manual mode's button or hotkey): post the held words now. Mid-utterance, the utterance ends at once and
     /// its words go with them. In auto mode it posts anything held without waiting for the pause timers.
     public func send() {
+        (backend as? OpenVoiceBackend)?.authorizeExplicitSend()
         utteranceOutcome?.explicitSend = true
         let inProgress = turnTaker?.inUtterance ?? false
         log("send pressed\(inProgress ? " mid-utterance" : "")")
@@ -1131,6 +1304,7 @@ public final class ConversationController {
 
     /// Auto (send after a pause) or manual (send only on Send). Switching to auto posts what is held.
     public func setSendMode(_ m: SendMode) {
+        guard !(backend is OpenVoiceBackend) || m == .manual else { fail("New conversation uses Manual Send"); return }
         guard m != app.sendMode else { return }
         app.sendMode = m
         status.manualSend = m == .manual && status.running
@@ -1153,6 +1327,7 @@ public final class ConversationController {
 
     /// Follow "chief" or an explicit session id from now on (switches at once while voice is on).
     public func setTargetSetting(_ t: String) {
+        guard !(backend is OpenVoiceBackend) else { fail("New conversation call binding is fixed"); return }
         app.target = t.isEmpty ? "chief" : t
         log("target setting=\(app.target)")
         guard status.running else { return }
@@ -1171,6 +1346,12 @@ public final class ConversationController {
     /// A change from the settings menu: write it to the app's own settings file (never agent-voice's), then apply
     /// it now. Device and echo changes restart voice if it is on, so the engine reopens with them.
     public func apply(_ change: SettingChange) async throws {
+        if backend is OpenVoiceBackend {
+            switch change {
+            case .target,.busyDelivery,.sendMode: throw ClientError("New conversation call binding and Manual Send are fixed")
+            default: break
+            }
+        }
         if case .sendHotkey(let h) = change, Hotkey.parse(h) == nil { throw ClientError("Not a hotkey: \(h) (use e.g. ctrl+option+space)") }
         if case .sensitivity(let level) = change, Sensitivity(rawValue: level) == nil { throw ClientError("Sensitivity is low, normal or high") }
         if let warning = try SettingsStore.saveAppSetting([change.key: change.value], appFile: appFile, voiceFile: voiceFile) {
@@ -1225,6 +1406,7 @@ public final class ConversationController {
     /// Speak a short sample in `name` (the settings' Preview). Skipped while a reply is playing, so it never cuts
     /// the chief off or plays over it.
     public func previewVoice(_ name: String, text: String = "Hi, this is how I sound. I'll read the chief's replies to you.") async {
+        guard !(backend is OpenVoiceBackend) else { fail("New conversation uses prepared reply audio only"); return }
         guard !speaker.active else { log("preview skipped: a reply is playing"); return }
         var cfg = voice
         cfg.voice = name
@@ -1240,6 +1422,7 @@ public final class ConversationController {
         speaker.cancelAutomaticCutIn()
         let wasActive = speaker.active
         speaker.stop()
+        if let candidate = backend as? OpenVoiceBackend { try? candidate.cancelNarration() }
         for b in blocks.values { b.skipToEnd() }
         log("playback silenced (\(reason))\(wasActive ? "" : " — nothing was playing")")
     }
@@ -1247,6 +1430,9 @@ public final class ConversationController {
     // MARK: Barge-in
 
     private func onset() {
+        if let candidate = backend as? OpenVoiceBackend {
+            candidateOnsets += 1; candidateOnset = (candidate.pump.client.admittedSamples, now())
+        }
         onEchoActivity?(false)
         VoiceTrace.shared.event("voiceprobe.onset")
         utteranceLease = currentLease
@@ -1260,7 +1446,7 @@ public final class ConversationController {
 
     private func bargeIn(trigger: String) {
         if utteranceOutcome != nil { return } // phone-ahead: automatic duck/decision owns this utterance.
-        guard bargeArmed, !halfDuplex else { return }
+        guard bargeArmed, !halfDuplex, !speaker.isHolding, !speaker.cuePlaying else { return }
         bargeArmed = false
         onEchoActivity?(true)
         VoiceTrace.shared.event("barge.trigger", ["trigger": trigger])
@@ -1351,6 +1537,7 @@ public final class ConversationController {
             outcome?.record(.posted, mode: UtteranceDeliveryMode(kind))
         } catch {
             outcome?.record(.postFailed, mode: UtteranceDeliveryMode(kind))
+            if backend is OpenVoiceBackend { quarantine(text,target:target,outcome:outcome) }
             fail("Voice delivery unknown; reconcile history before sending again: \(error.localizedDescription)")
             await resync(reason: "send failed")
         }
@@ -1403,6 +1590,12 @@ public final class ConversationController {
                 if runEpoch == epoch { fail("Connection: \(error.localizedDescription)") }
             }
             guard runEpoch == epoch else { return }
+            if let candidate = backend as? OpenVoiceBackend {
+                acceptInput = false; status.phase = "starting"
+                if status.running { fail("New conversation disconnected; no replay or legacy fallback") }
+                candidate.closeMedia(origin:.streamEnd) // terminal stream loss must stop the actual producer too
+                return
+            }
             status.connection = "reconnecting"
             acceptInput = false; status.phase = "starting"
             let delay = holdOff ?? reconnectDelay
@@ -1414,6 +1607,7 @@ public final class ConversationController {
 
     /// Re-read chief.json every few seconds (switch when it changes), and watch for agent-voice taking the mic.
     private func pollLoop(epoch: Int) async {
+        if backend is OpenVoiceBackend { return } // no chief/history discovery or automatic reconnect lane
         var lastChief = now(), lastMic = now(), lastLevel = now()
         while runEpoch == epoch && !Task.isCancelled {
             try? await Task.sleep(nanoseconds: 200_000_000)
@@ -1459,14 +1653,19 @@ public final class ConversationController {
     /// inbox items (which include messages from other sessions) and everything else never touch playback.
     public func handle(_ event: ServerEvent) {
         guard let sid = event.sessionID, sid == status.target else { return }
+        if backend is OpenVoiceBackend && event.type.hasPrefix("session.text.") { return }
         switch event.type {
         case "session.execution.started":
+            onAgentProcessing?(true)
+            if backend is OpenVoiceBackend { resetCandidateInputWatch() }
             status.busy = true
             status.narrationPaused = false
             if draftLease == currentLease { draftBusy = true }
             if utteranceLease == currentLease { utteranceBusy = true }
             log("execution.started")
         case "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted":
+            onAgentProcessing?(false)
+            if backend is OpenVoiceBackend { resetCandidateInputWatch() }
             status.busy = false
             status.narrationPaused = false
             if draftLease == currentLease { draftBusy = false }
@@ -1516,6 +1715,7 @@ public final class ConversationController {
     /// Native remote lifecycle has already reconciled full source context and history boundaries.
     /// Reuse these segmenters so barge-in/output mute still silence already-received words.
     public func consumeNarration(_ update: NarrationUpdate) {
+        guard !(backend is OpenVoiceBackend) else { return }
         guard status.running || callPaused else { return }
         let segment = blocks[update.blockKey] ?? makeSegments(update.blockKey)
         blocks[update.blockKey] = segment

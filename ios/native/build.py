@@ -18,7 +18,7 @@ PRIVATE = ROOT / 'private'
 TEAM = os.environ.get('FV_APPLE_TEAM_ID', '')
 BUNDLE = os.environ.get('FV_BUNDLE_ID', 'org.example.voicestack')
 PHONE = os.environ.get('FV_DEVICE_UDID', '')
-BUILD = 36
+BUILD = 37
 MODE = os.environ.get('FV_BUILD_MODE', 'UPDATE')
 ENV = {k: v for k, v in os.environ.items() if k not in ('FV_PAIRING_BOOTSTRAP_JSON', 'FV_PAIRING_BOOTSTRAP_FILE')}
 
@@ -47,10 +47,14 @@ def generate():
     obj(2, f'isa = PBXNativeTarget; buildConfigurationList = {ident(11)}; buildPhases = ({ident(5)}, {ident(6)}, {ident(7)}); buildRules = (); dependencies = (); name = FloatingVoice; productName = FloatingVoice; productReference = {ident(8)}; productType = "com.apple.product-type.application";')
     obj(20, 'isa = PBXFileReference; lastKnownFileType = folder.icon; path = Icon/AppIcon.icon; sourceTree = "<group>";')
     obj(21, f'isa = PBXBuildFile; fileRef = {ident(20)};')
+    music = (ROOT / 'native/HoldMusic.pcm').is_file()
+    if music:
+        obj(22, 'isa = PBXFileReference; lastKnownFileType = file; path = HoldMusic.pcm; sourceTree = "<group>";')
+        obj(23, f'isa = PBXBuildFile; fileRef = {ident(22)};')
     obj(3, f'isa = PBXGroup; children = ({",".join(refs)},{ident(20)},{ident(301)},{ident(4)}); sourceTree = "<group>";')
     obj(4, f'isa = PBXGroup; children = ({ident(8)},{ident(303)}); name = Products; sourceTree = "<group>";')
     obj(5, f'isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = ({",".join(builds)}); runOnlyForDeploymentPostprocessing = 0;')
-    for n, isa in [(6, 'PBXFrameworksBuildPhase'), (7, 'PBXResourcesBuildPhase')]: obj(n, f'isa = {isa}; buildActionMask = 2147483647; files = ({ident(21) if n == 7 else ""}); runOnlyForDeploymentPostprocessing = 0;')
+    for n, isa in [(6, 'PBXFrameworksBuildPhase'), (7, 'PBXResourcesBuildPhase')]: obj(n, f'isa = {isa}; buildActionMask = 2147483647; files = ({(ident(21) + ("," + ident(23) if music else "")) if n == 7 else ""}); runOnlyForDeploymentPostprocessing = 0;')
     obj(8, 'isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FloatingVoice.app; sourceTree = BUILT_PRODUCTS_DIR;')
     for n, first in [(10,12),(11,14)]: obj(n, f'isa = XCConfigurationList; buildConfigurations = ({ident(first)}, {ident(first+1)}); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;')
     for n, name in [(12,'Debug'),(13,'Release')]:

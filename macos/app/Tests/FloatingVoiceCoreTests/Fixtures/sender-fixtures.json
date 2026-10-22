@@ -1,4 +1,13 @@
 [
+  {"text":"[voice] ended","kind":"system","label":"Voicestack","displayText":"Voice ended"},
+  {"text":"[voice] ended","localSubmission":true,"kind":"system","label":"Voicestack","displayText":"Voice ended"},
+  {"text":"[voice] ended","metadata":{"a2a":{"v":1,"from":"mac/ses_abc123","traceId":"a2a_ended","hop":0,"kind":"request"}},"kind":"agent","label":"Agent message","displayText":"ended"},
+  {"text":"[voice] ended","localSubmission":true,"metadata":{"a2a":{"v":1,"from":"mac/ses_abc123","traceId":"a2a_ended","hop":0,"kind":"request"}},"kind":"system","label":"Voicestack","displayText":"Voice ended"},
+  {"text":"[voice] ended (call)","kind":"principal","label":"You","displayText":"ended (call)"},
+  {"text":"[voice] ended (app)","kind":"principal","label":"You","displayText":"ended (app)"},
+  {"text":"[voice] ended\n","kind":"principal","label":"You","displayText":"ended\n"},
+  {"text":"[voice] ended.","localSubmission":true,"kind":"principal","label":"You","displayText":"ended."},
+  {"text":"[voice] [voice] ended","kind":"principal","label":"You","displayText":"[voice] ended"},
   {"text":"Please review the build.","kind":"system","label":"Message","displayText":"Please review the build."},
   {"text":"[lead Dream Studio]\nMy own quote.","localSubmission":true,"kind":"principal","label":"You","displayText":"[lead Dream Studio]\nMy own quote."},
   {"text":"[Agent Canvas]\nMy own words.","localSubmission":true,"kind":"principal","label":"You","displayText":"[Agent Canvas]\nMy own words."},
@@ -48,14 +57,5 @@
   {"text":"[voice] [voice] literal content","metadata":{"a2a":{"v":1,"from":"mac/ses_abc123","traceId":"a2a_voice","hop":1,"kind":"reply"}},"sessionTitle":"Dream Studio","kind":"agent","label":"Agent · Dream Studio","displayText":"[voice] literal content"},
   {"text":"[Voice] Wrong case.","kind":"system","label":"Message","displayText":"[Voice] Wrong case."},
   {"text":"[voice]No space.","kind":"system","label":"Message","displayText":"[voice]No space."},
-  {"text":"I said [voice] mid-sentence.","kind":"system","label":"Message","displayText":"I said [voice] mid-sentence."},
-  {"text":"[voice] ended","kind":"system","label":"Voicestack","displayText":"Voice ended"},
-  {"text":"[voice] ended","localSubmission":true,"kind":"system","label":"Voicestack","displayText":"Voice ended"},
-  {"text":"[voice] ended","metadata":{"a2a":{"v":1,"from":"fictional/ses_freshRecipeSender01","to":"fictional/ses_freshRecipeTarget01","traceId":"a2a_freshRecipe01","hop":1,"kind":"request"}},"sessionTitle":"Fictional Recipe Sender","kind":"agent","label":"Agent · Fictional Recipe Sender","displayText":"ended"},
-  {"text":"[voice] ended","metadata":{"a2a":{"v":1,"from":"fictional/ses_freshRecipeSender01","to":"fictional/ses_freshRecipeTarget01","traceId":"a2a_freshRecipe01","hop":1,"kind":"request"}},"localSubmission":true,"kind":"system","label":"Voicestack","displayText":"Voice ended"},
-  {"text":"\"[voice] ended\"","kind":"system","label":"Message","displayText":"\"[voice] ended\""},
-  {"text":"```\n[voice] ended\n```","kind":"system","label":"Message","displayText":"```\n[voice] ended\n```"},
-  {"text":" [voice] ended","kind":"system","label":"Message","displayText":" [voice] ended"},
-  {"text":"[voice] ended.","kind":"principal","label":"You","displayText":"ended."},
-  {"text":"[voice] [voice] ended","kind":"principal","label":"You","displayText":"[voice] ended"}
+  {"text":"I said [voice] mid-sentence.","kind":"system","label":"Message","displayText":"I said [voice] mid-sentence."}
 ]

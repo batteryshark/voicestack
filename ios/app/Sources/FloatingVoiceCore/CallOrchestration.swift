@@ -69,11 +69,22 @@ public extension CallProviderAdapter {
     public var incomingTimeout: UInt64 = 12_000_000_000
     public var readinessTimeout: UInt64 = 20_000_000_000
     public var beginMedia: ((Int) async -> Bool)?
+    /// Incoming-only pickup cue, started (non-blocking) once call media is first
+    /// ready, so it plays through the live call output. Never replayed on route recovery.
+    public var pickupCue: (() -> Void)?
+    private var pickupCueAttempted = false
     public var pauseMedia: (() -> Void)?
     public var endMedia: (() -> Void)?
     public var onTerminal: (() -> Void)?
     public var onDeliberateEnd: ((VoiceEndedSession) -> Void)?
     private var voiceEndedSession: VoiceEndedSession?
+    private struct CandidateAuthority {
+        weak var backend: OpenVoiceBackend?
+        let owner: IncomingCallOwner
+        let target: TargetLease
+    }
+    private var candidateAuthority: CandidateAuthority?
+    private var revokingCandidate = false
     public var recoveryPaused: ((CallEndCause) -> Void)?
     public var mediaReady: (() -> Void)?
     public var setMuted: ((Bool) -> Void)?
@@ -109,12 +120,14 @@ public extension CallProviderAdapter {
             if admitted {
                 _ = lifecycle.incoming(id: invitation.id); incoming = invitation
                 voiceEndedSession = nil // Ringing/decline has no bound voice session.
+                candidateAuthority = nil
                 StageDiagnostics.shared.beginCall()
                 incomingReportedRinging = false
                 provider = adapter; cycle += 1
                 sessionActive = false; waitingForHoldRelease = false; reportedConnected = false; routeMediaPaused = false
                 resetActivationTracking(); providerInvalidated = false
                 hasEverBeenMediaReady = false; mediaAttempt = .initial
+                pickupCueAttempted = false
                 let owner = cycle
                 adapter.onEvent = { [weak self] in self?.receive($0, cycle: owner) }
                 setMuted?(false)
@@ -161,6 +174,7 @@ public extension CallProviderAdapter {
         releaseInvalidatedIdleProvider()
         guard !draining else { failed?("Previous call is releasing audio; try Start again"); return }
         guard let epoch = lifecycle.begin(target: target), let id = lifecycle.id else { return }
+        candidateAuthority = nil
         voiceEndedSession = VoiceEndedSession(kind: .call, target: target, callEpoch: epoch)
         StageDiagnostics.shared.beginCall()
         cycle += 1
@@ -185,12 +199,68 @@ public extension CallProviderAdapter {
     public func restrictPolicy() {
         endDecision(lifecycle.epoch, cause: .policyRestricted, reason: .ended, initiator: .policyChange, termination: .policyRestricted)
     }
+    /// Module-only provenance registration, after authenticated candidate selection
+    /// and before the coordinator binds the answered target. Nil alone is no grant.
+    func registerCandidateAuthority(_ candidate: OpenVoiceBackend, owner: IncomingCallOwner) throws {
+        guard lifecycle.admits(owner.epoch), lifecycle.id == owner.id, incoming?.id == owner.id,
+              lifecycle.state == .ringing, lifecycle.target == nil,
+              !candidate.mediaClosed, candidate.invitation.status == "accepted", candidate.invitation.owner.callUUID == owner.id,
+              candidateAuthority == nil else { throw ClientError("Candidate call owner unavailable") }
+        candidateAuthority = CandidateAuthority(backend:candidate,owner:owner,target:candidate.target)
+    }
+    private func ownsCandidate(_ authority: CandidateAuthority) -> Bool {
+        guard let candidate = authority.backend, let current = candidateAuthority,
+              current.backend === candidate, current.owner == authority.owner, current.target == authority.target,
+              lifecycle.admits(authority.owner.epoch), lifecycle.id == authority.owner.id,
+              candidate.invitation.owner.callUUID == authority.owner.id, candidate.target == authority.target else { return false }
+        return lifecycle.target == authority.target ||
+            (lifecycle.target == nil && lifecycle.state == .ringing && incoming?.id == authority.owner.id)
+    }
+    /// Exact captured owner + authenticated backend only; never a public terminal
+    /// override. Producer teardown is synchronous, and finish rechecks provenance.
+    @discardableResult func revokeCandidateAuthority(_ candidate: OpenVoiceBackend, owner: IncomingCallOwner) -> Bool {
+        guard !revokingCandidate, let authority = candidateAuthority,
+              authority.backend === candidate, authority.owner == owner, ownsCandidate(authority) else { return false }
+        revokingCandidate = true; defer { revokingCandidate = false }
+        candidate.closeMedia()
+        guard ownsCandidate(authority) else { return false }
+        endDecision(owner.epoch,cause:.policyRestricted,reason:.ended,initiator:.policyChange,
+                    termination:.policyRestricted,candidateRevocation:authority)
+        return !lifecycle.admits(owner.epoch)
+    }
     public func mediaFailed(_ cause: CallEndCause = .mediaFailure) {
         // Public media callers cannot impersonate terminal user/system authority.
         let allowed: Set<CallEndCause> = [.mediaFailure, .captureFailure, .conversionFailure, .repairFailure, .backendFailure, .leaseFailure, .mediaReset]
         endDecision(lifecycle.epoch, cause: allowed.contains(cause) ? cause : .mediaFailure, reason: .failed,
             initiator: cause == .leaseFailure ? .targetChange : .mediaFailure,
             termination: cause == .leaseFailure ? .targetChanged : .mediaFailed)
+    }
+    /// Narrow candidate failure entry points. Proof is checked here AND at the
+    /// private terminal boundary; generic mediaFailed retains its pause policy.
+    @discardableResult public func candidateBackendFailed(_ candidate: OpenVoiceBackend, ownerEpoch: Int, cause: CallEndCause) -> Bool {
+        guard cause == .backendFailure || cause == .mediaFailure else { return false }
+        return finishCandidateFailure(candidate,ownerEpoch:ownerEpoch,cause:cause)
+    }
+    @discardableResult public func candidateInputFailed(_ candidate: OpenVoiceBackend, ownerEpoch: Int, failure: CandidateInputFailure) -> Bool {
+        guard candidate.fatalInputFailure == failure else { return false }
+        return finishCandidateFailure(candidate,ownerEpoch:ownerEpoch,cause:.captureFailure)
+    }
+    private func ownsCandidateFailure(_ authority: CandidateAuthority, cause: CallEndCause) -> Bool {
+        guard ownsCandidate(authority), let candidate = authority.backend, candidate.mediaClosed else { return false }
+        switch cause {
+        case .backendFailure: return candidate.mediaCloseOrigin == .clientFailure || candidate.mediaCloseOrigin == .backendFailure
+        case .mediaFailure: return candidate.mediaCloseOrigin == .streamEnd
+        case .captureFailure: return candidate.mediaCloseOrigin == .controllerStop && candidate.fatalInputFailure != nil
+        default: return false
+        }
+    }
+    private func finishCandidateFailure(_ candidate: OpenVoiceBackend, ownerEpoch: Int, cause: CallEndCause) -> Bool {
+        guard let authority = candidateAuthority, authority.backend === candidate,
+              authority.owner.epoch == ownerEpoch, ownsCandidateFailure(authority,cause:cause) else { return false }
+        endDecision(ownerEpoch,cause:cause,reason:.failed,
+            error:cause == .captureFailure ? "Voice input failed; review without replay" : "Voice connection lost; review without replay",
+            initiator:.mediaFailure,termination:.mediaFailed,candidateFailure:authority)
+        return !lifecycle.admits(ownerEpoch)
     }
     public func mute(_ muted: Bool) { if hasCall, let id = lifecycle.id { provider?.requestMute(id, muted: muted) } }
     public func hold(_ held: Bool) { if hasCall, let id = lifecycle.id { provider?.requestHold(id, held: held) } }
@@ -347,6 +417,10 @@ public extension CallProviderAdapter {
                 self.deadline?.cancel(); self.deadline = nil
                 if !self.reportedConnected { self.reportedConnected = true; if self.incoming == nil { self.provider?.connected(id) } }
                 self.mediaReady?(); self.refresh()
+                if self.incoming != nil && !self.pickupCueAttempted {
+                    self.pickupCueAttempted = true
+                    self.pickupCue?()
+                }
             } else { self.endDecision(epoch, cause: .mediaFailure, reason: .failed, error: "Voice could not become ready", initiator: .mediaFailure, termination: .mediaFailed) }
         }
     }
@@ -378,12 +452,20 @@ public extension CallProviderAdapter {
     private func endDecision(_ epoch: Int, cause: CallEndCause, reason: CallEndReason, error: String? = nil,
         initiator: CallEndInitiator = .app, termination: CallTerminationReason = .requested,
         reportFailure: IncomingReportFailure? = nil, reportCode: Int? = nil,
-        requestSystemEnd: Bool = false, rejection: (CallProviderAdapter, PushInvitation)? = nil) {
+        requestSystemEnd: Bool = false, rejection: (CallProviderAdapter, PushInvitation)? = nil,
+        candidateRevocation: CandidateAuthority? = nil, candidateFailure: CandidateAuthority? = nil) {
         guard rejection != nil || (lifecycle.admits(epoch) && !draining) else { return }
+        if let authority = candidateRevocation {
+            guard candidateFailure == nil, cause == .policyRestricted, authority.owner.epoch == epoch, rejection == nil, ownsCandidate(authority) else { return }
+        }
+        if let authority = candidateFailure {
+            guard candidateRevocation == nil, authority.owner.epoch == epoch, rejection == nil,
+                  ownsCandidateFailure(authority,cause:cause) else { return }
+        }
         if cause == .routePause && !mayChangeLiveRoute { routeControlRejected(); return }
         let everReady = rejection == nil && hasEverBeenMediaReady
         let attempt: CallMediaAttempt = rejection == nil ? mediaAttempt : .initial
-        let decision = CallEndAuthority.decide(cause, everReady: everReady, attempt: attempt)
+        let decision = candidateRevocation == nil && candidateFailure == nil ? CallEndAuthority.decide(cause, everReady: everReady, attempt: attempt) : .terminal
         if rejection == nil, ![CallEndCause.userEnd, .systemEnd, .routePause].contains(cause) {
             voiceEndedSession?.invalidate()
         }
@@ -407,6 +489,8 @@ public extension CallProviderAdapter {
             StageDiagnostics.shared.record(.call, .cancelled, callEvent: .endRequested, callEndInitiator: initiator, callEndReason: termination)
             provider?.requestEnd(id)
         }
+        if let authority = candidateRevocation { guard ownsCandidate(authority) else { return } }
+        if let authority = candidateFailure { guard ownsCandidateFailure(authority,cause:cause) else { return } }
         finish(epoch, reason: reason, error: error, initiator: initiator, termination: termination, reportFailure: reportFailure, reportCode: reportCode,
                deliberate: [.userEnd, .systemEnd].contains(cause) && termination != .declined && lifecycle.state != .ringing)
     }
@@ -418,6 +502,7 @@ public extension CallProviderAdapter {
     private func finish(_ epoch: Int, reason: CallEndReason, error: String? = nil, initiator: CallEndInitiator = .app, termination: CallTerminationReason = .requested, reportFailure: IncomingReportFailure? = nil, reportCode: Int? = nil, deliberate: Bool = false) {
         let id = lifecycle.id
         guard lifecycle.end(epoch) else { return }
+        candidateAuthority = nil
         if let incoming {
             emit(incoming, CallReceipt(.ended, reason: termination, initiator: initiator, reportedRinging: incomingReportedRinging, reportFailure: reportFailure, reportErrorCode: reportCode))
             self.incoming = nil

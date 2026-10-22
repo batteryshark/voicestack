@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { SpeechTransferTiming } from './speech-timing.mjs';
 import { createBridge } from './server.mjs';
+import { unpairedDesktop } from './fixtures/synthetic-desktop.mjs';
 
 test('bounded arrival histogram counts bytes, first byte, max and nearest-rank p95', () => {
   const timing = new SpeechTransferTiming(0);
@@ -22,7 +23,7 @@ test('bounded arrival histogram counts bytes, first byte, max and nearest-rank p
 
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const close = server => new Promise(resolve => server.close(resolve));
-test('real loopback proxy records upstream TTFB/chunks/total with existing attempt and no payload', async () => {
+test('real loopback proxy records upstream TTFB/chunks/total with existing attempt and no payload', async t => {
   const stages = [], attempt = '12345678-1234-4234-8234-123456789abc';
   const upstream = http.createServer((req, res) => {
     req.resume(); req.once('end', () => {
@@ -31,7 +32,7 @@ test('real loopback proxy records upstream TTFB/chunks/total with existing attem
     });
   });
   await listen(upstream);
-  const bridge = createBridge({ credentials: { device: () => ({}) }, ttsPort: upstream.address().port, diagnostic: entry => stages.push(entry) });
+  const bridge = createBridge({ credentials: { device: () => ({}) }, ...unpairedDesktop(t, upstream), ttsPort: upstream.address().port, diagnostic: entry => stages.push(entry) });
   await listen(bridge);
   try {
     const received = await new Promise((resolve, reject) => {
@@ -53,10 +54,10 @@ test('real loopback proxy records upstream TTFB/chunks/total with existing attem
   } finally { bridge.shutdown(); await close(upstream); }
 });
 
-test('upstream refusal without bytes has one failed completion and no fake first byte', async () => {
+test('upstream refusal without bytes has one failed completion and no fake first byte', async t => {
   const upstream = http.createServer((req, res) => { req.resume(); req.once('end', () => { res.writeHead(503); res.end(); }); });
   await listen(upstream);
-  const stages = [], bridge = createBridge({ credentials: { device: () => ({}) }, ttsPort: upstream.address().port, diagnostic: entry => stages.push(entry) });
+  const stages = [], bridge = createBridge({ credentials: { device: () => ({}) }, ...unpairedDesktop(t, upstream), ttsPort: upstream.address().port, diagnostic: entry => stages.push(entry) });
   await listen(bridge);
   try {
     await new Promise((resolve, reject) => {

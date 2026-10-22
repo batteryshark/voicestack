@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { once } from 'node:events';
 import { SessionEvents, createBridge } from './server.mjs';
+import { unpairedDesktop } from './fixtures/synthetic-desktop.mjs';
 
 const sid = 'ses_owned', limit = 262144;
 const good = (text = 'later owned event') => 'data: ' + JSON.stringify({ type: 'session.text.delta', data: { sessionID: sid, delta: text } }) + '\n\n';
@@ -108,7 +109,7 @@ test('partial record at EOF is diagnosed and refreshes; throwing diagnostics can
   assert(c.events().some(x => x.data.delta === 'later owned event'));
   assert(c.events().at(-1).type === 'session.inbox.delivered');
 });
-test('real HTTP pipeline survives all bad records, preserves heartbeat and closes cleanly', async () => {
+test('real HTTP pipeline survives all bad records, preserves heartbeat and closes cleanly', async t => {
   const logs = [];
   const upstream = http.createServer((req, res) => {
     if (req.url === '/api/system/info') { res.end('{"runtime":"desktop"}'); return; }
@@ -118,7 +119,7 @@ test('real HTTP pipeline survives all bad records, preserves heartbeat and close
     res.write(large(sid).slice(0, -1)); res.write('\n'+good()); res.end();
   });
   upstream.listen(0, '127.0.0.1'); await once(upstream, 'listening');
-  const bridge = createBridge({ credentials: { device: () => ({ sessionID: sid, generation: 'fixture' }) }, discover: () => upstream.address().port, diagnostic: e => logs.push(e) });
+  const bridge = createBridge({ credentials: { device: () => ({ sessionID: sid, generation: 'fixture' }) }, ...unpairedDesktop(t, upstream), diagnostic: e => logs.push(e) });
   bridge.listen(0, '127.0.0.1'); await once(bridge, 'listening');
   try {
     const request = http.get({ host: '127.0.0.1', port: bridge.address().port, path: '/floating-voice/v1/sessions/'+sid+'/events', headers: { 'X-FV-Generation': 'fixture' } });

@@ -110,26 +110,6 @@ private final class RouteFixture: @unchecked Sendable {
             remote.disconnect(); RouteProtocol.handler = nil
         }
     }
-    @Test func coldStartTapIsRetainedUntilReadyAndConcurrentDrainsRouteOnce() async throws {
-        let queue = NotificationTapQueue()
-        var active = false, prepared = false, routed = 0, presented = false
-        let tap = NotificationTapQueue.Tap(id: "reachout", category: "NEED")
-        queue.enqueue(tap)
-        try await queue.drain(ready: { active }) { _ in Issue.record("Cold tap drained too early") }
-        active = true
-        let route = Task {
-            try await queue.drain(ready: { active }) { received in
-                #expect(received == tap); routed += 1
-                try await NotificationRouting.step(.prepare) { try await Task.sleep(nanoseconds: 30_000_000); prepared = true }
-                #expect(prepared)
-                presented = true
-            }
-        }
-        #expect(await waitUntil { routed == 1 })
-        try await queue.drain(ready: { active }) { _ in Issue.record("Duplicate foreground/delegate tap") }
-        try await route.value
-        #expect(routed == 1 && prepared && presented)
-    }
     @Test func closedRouteFailureDoesNotExportSensitiveErrorTextAndOldEntriesDecode() async throws {
         let diagnostics = StageDiagnostics()
         do {

@@ -15,3 +15,11 @@
 .env
 *.local.*
 **/xcuserdata/
+ios/native/HoldMusic.pcm
+**/lead/
+LEAD.md
+opencode.json
+**/.opencode/
+*.jsonl
+*.log
+**/DerivedData/

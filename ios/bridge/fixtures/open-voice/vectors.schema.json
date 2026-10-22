@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Open voice M1 reusable conformance vectors v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "profile", "schemaVersion", "defaultSession", "notes", "client", "server", "updates", "futureState"],
+  "properties": {
+    "$schema": {"const":"./vectors.schema.json"},
+    "profile": {"const":"open-voice-m1-ga-ws/1"},
+    "schemaVersion": {"const":1},
+    "defaultSession": {"type":"object"},
+    "notes": {"type":"array","items":{"type":"string"}},
+    "client": {"type":"array","items":{"$ref":"#/$defs/eventCase"}},
+    "server": {"type":"array","items":{"$ref":"#/$defs/eventCase"}},
+    "updates": {"type":"array","items":{"$ref":"#/$defs/updateCase"}},
+    "futureState": {"type":"array","items":{"type":"object","additionalProperties":false,"required":["name","enforcement","order","expectation"],"properties":{"name":{"type":"string"},"enforcement":{"const":"future-state"},"order":{"type":"array","items":{"type":"string"}},"expectation":{"type":"string"}}}}
+  },
+  "$defs": {
+    "expected": {"type":"object","additionalProperties":false,"required":["ok"],"properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"effect":{"type":"string"},"output_modalities":{"enum":[["audio"],["text"]]}}},
+    "eventCase": {"type":"object","additionalProperties":false,"required":["name","input","expected"],"properties":{"name":{"type":"string"},"input":{},"context":{"type":"object"},"expected":{"$ref":"#/$defs/expected"}}},
+    "updateCase": {"type":"object","additionalProperties":false,"required":["name","patch","expected"],"properties":{"name":{"type":"string"},"patch":{"type":"object"},"context":{"type":"object"},"expected":{"$ref":"#/$defs/expected"}}}
+  }
+}

@@ -14,7 +14,7 @@ import WebKit
         #expect(row.body.first?.markdown == "Canvas panel")
     }
     @Test func canvasLinksAreNotWebDestinations() throws {
-        for url in ["https://canvas.fixture.invalid/#key=[redacted]&view=111", "https://canvas.fixture.invalid/?key=fake", "https://canvas.fixture.invalid/#view=111", "https://host-06.example.ts.net/", "https://opaque.fixture.invalid/#%6bey=fake", "https://canvas.fixture.invalid:9444/no-key"] {
+        for url in ["https://canvas.fixture.invalid/#key=[redacted]&view=111", "https://canvas.fixture.invalid/?key=fake", "https://canvas.fixture.invalid/#view=111", "https://canvas.fixture.ts.net/", "https://opaque.fixture.invalid/#%6bey=fake", "https://canvas.fixture.invalid:9444/no-key"] {
             #expect(!LinkPolicy().web(try #require(URL(string: url))))
         }
     }

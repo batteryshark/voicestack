@@ -1,4 +1,31 @@
 import Foundation
+#if canImport(AVFoundation)
+import AVFoundation
+
+/// Shared by native scheduling and offline rendering: mono signed little-endian PCM16.
+public enum PCMPlaybackBuffer {
+    public static func make(_ pcm: Data, format: AVAudioFormat) throws -> AVAudioPCMBuffer {
+        guard pcm.count > 0, pcm.count % 2 == 0, format.commonFormat == .pcmFormatFloat32,
+              format.channelCount == 1, !format.isInterleaved,
+              let buffer = AVAudioPCMBuffer(pcmFormat:format,frameCapacity:AVAudioFrameCount(pcm.count/2)) else {
+            throw ClientError("Invalid mono PCM16 playback buffer")
+        }
+        buffer.frameLength = AVAudioFrameCount(pcm.count/2)
+        let bytes = [UInt8](pcm)
+        for i in 0..<pcm.count/2 {
+            buffer.floatChannelData![0][i] = Float(Int16(bitPattern:UInt16(bytes[i*2]) | UInt16(bytes[i*2+1]) << 8)) / 32768
+        }
+        return buffer
+    }
+}
+#endif
+
+public struct PlaybackSourceProgress {
+    public enum State: String { case playing, paused, stopped, completed, unknown }
+    public let renderedSamples: Int
+    public let state: State
+    public init(renderedSamples: Int, state: State) { self.renderedSamples = renderedSamples; self.state = state }
+}
 
 /// Mono s16le PCM for one sentence. Chunks arrive while the speech server is still generating.
 public struct SpeechAudio {
@@ -6,8 +33,12 @@ public struct SpeechAudio {
     public let chunks: AsyncThrowingStream<Data, Error>
     public let diagnosticAttempt: UUID?
     public let fullyBuffered: Bool
-    public init(sampleRate: Int, chunks: AsyncThrowingStream<Data, Error>, diagnosticAttempt: UUID? = nil, fullyBuffered: Bool = false) {
+    /// Optional source-delivery observer. Scheduling/stream consumption is not progress.
+    public let sourceProgress: (@MainActor (PlaybackSourceProgress) -> Void)?
+    public init(sampleRate: Int, chunks: AsyncThrowingStream<Data, Error>, diagnosticAttempt: UUID? = nil, fullyBuffered: Bool = false,
+                sourceProgress: (@MainActor (PlaybackSourceProgress) -> Void)? = nil) {
         self.sampleRate = sampleRate; self.chunks = chunks; self.diagnosticAttempt = diagnosticAttempt; self.fullyBuffered = fullyBuffered
+        self.sourceProgress = sourceProgress
     }
 
     public static func whole(_ pcm: Data, sampleRate: Int, diagnosticAttempt: UUID? = nil) -> SpeechAudio {

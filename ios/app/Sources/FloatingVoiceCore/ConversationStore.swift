@@ -49,10 +49,6 @@ public final class ConversationStore {
     public private(set) var active = false
     private var order: [String] = []
     private var byID: [String: Data] = [:]
-    // Text ordinals are per-kind identities, not allocation sizes. A missing
-    // prefix stays sparse until actual parts or history establish its position.
-    // Narration/frontier ownership remains independent of this display storage.
-    private var pendingRecordText: [String: [Int: String]] = [:]
     private var coveredText: [String: String] = [:]
     private var seenEvents: Set<String> = []
     private var eventOrder: [String] = []
@@ -126,10 +122,6 @@ public final class ConversationStore {
                (existing?["time"] as? [String: Any])?["completed"] == nil {
                 time.removeValue(forKey: "completed"); merged["time"] = time
             }
-            // Apply the same existing live/snapshot text preference to newly
-            // addressable sparse slots. Never replay deltas onto snapshot text.
-            materializeRecordText(&merged, id: id,
-                keepText: { ordinal in ended || !newer || self.liveOwned.contains("\(id):\(ordinal)") })
             byID[id] = try JSONSerialization.data(withJSONObject: merged, options: [.sortedKeys])
             snapshotRanks[id] = max(snapshotRanks[id] ?? -1, snapshot.sequence)
         }
@@ -273,33 +265,15 @@ public final class ConversationStore {
               let ordinal = event.data["ordinal"] as? Int, ordinal >= 0 else { return }
         var record = byID[id].flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }
             ?? ["id": id, "type": "assistant"]
-        pendingRecordText[id, default: [:]][ordinal] = text
-        materializeRecordText(&record, id: id, keepText: { _ in true })
+        var content = record["content"] as? [[String: Any]] ?? []
+        var slots = content.indices.filter { content[$0]["type"] as? String == "text" }
+        while slots.count <= ordinal {
+            slots.append(content.count); content.append(["type": "text", "text": ""])
+        }
+        content[slots[ordinal]]["text"] = text
+        record["content"] = content
         if byID[id] == nil { order.append(id) }
         byID[id] = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys])
         records = order.compactMap { byID[$0] }
-    }
-
-    private func materializeRecordText(_ record: inout [String: Any], id: String,
-                                       keepText: (Int) -> Bool) {
-        guard var pending = pendingRecordText[id] else { return }
-        var content = record["content"] as? [[String: Any]] ?? []
-        var slots = content.indices.filter { content[$0]["type"] as? String == "text" }
-        // Walk actual pending parts, not the numeric distance to an ordinal.
-        for ordinal in pending.keys.filter({ $0 < slots.count }) {
-            let text = pending.removeValue(forKey: ordinal)!
-            // mergeRecord retains fallback fields absent from the winning slot.
-            // A present null, non-String or empty String is still an override.
-            if keepText(ordinal) || content[slots[ordinal]]["text"] == nil {
-                content[slots[ordinal]]["text"] = text
-            }
-        }
-        // Each iteration consumes one real part; a gap, however large, stops it.
-        while let text = pending.removeValue(forKey: slots.count) {
-            slots.append(content.count)
-            content.append(["type": "text", "text": text])
-        }
-        pendingRecordText[id] = pending.isEmpty ? nil : pending
-        record["content"] = content
     }
 }

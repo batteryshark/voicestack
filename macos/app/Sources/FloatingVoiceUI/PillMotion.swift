@@ -13,9 +13,10 @@ public enum PillLayout {
     // Card metrics (points).
     static let inset: CGFloat = 8          // buttons nest concentrically in the corners: radius 22 - button 14
     static let side: CGFloat = 16
-    static let top: CGFloat = 13
-    static let header: CGFloat = 16
-    static let headerGap: CGFloat = 11
+    // Same 40pt header band/caption start; full-height actions no longer overflow a 16pt row.
+    static let top: CGFloat = 7
+    static let header: CGFloat = 28
+    static let headerGap: CGFloat = 5
     static let sectionGap: CGFloat = 11
     static let label: CGFloat = 13
     static let labelGap: CGFloat = 3

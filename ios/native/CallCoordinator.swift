@@ -4,6 +4,22 @@ import UIKit
 import SwiftUI
 import AVKit
 
+final class BundledHoldMusicTicket: SpeechTicket {
+    let text = ""
+    private let pcm: Data
+    private var cancelled = false
+    init?() {
+        guard let url = Bundle.main.url(forResource:"HoldMusic",withExtension:"pcm"),
+              let data = try? Data(contentsOf:url), !data.isEmpty, data.count <= 1_440_000 else { return nil }
+        pcm = data
+    }
+    func audio() async throws -> SpeechAudio {
+        guard !cancelled else { throw CancellationError() }
+        return .whole(pcm,sampleRate:24000)
+    }
+    func cancel() { cancelled = true }
+}
+
 extension CallCoordinator {
     convenience init(audio: AudioSessionCoordinator) {
         self.init(makeProvider: { NativeCallProvider(audio: audio, lifecycle: $0) })

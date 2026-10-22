@@ -18,7 +18,9 @@ On Mac, choose your microphone, speaker and target session. Automatic mode sends
 
 Speak, watch your words appear as recognition arrives, and pause to send a turn, or hold it for manual Send. Replies play sentence by sentence as the agent writes; compatible speech services can stream audio too. On an echo-safe route you can cut into playback and continue the conversation. On the iPhone speaker, use Tap to cut in before talking. Queue or Steer controls how new words reach a busy agent, and cutting off playback doesn't cancel its work by default.
 
-The configured caller agent can use the bridge's reach-out sender to request an iPhone alert when it needs a decision or has something ready to try, or an incoming call for an urgent decision. Answering opens a voice conversation with the originating session. This requires authorized tool access and configured push delivery; call permissions, quiet hours, rate limits and Focus still apply. [iPhone setup](ios/SETUP.md#agent-initiated-alerts-and-calls) covers that tool path.
+Chief can use the bridge's call sender for an urgent decision. Answering opens a voice conversation with the originating session, with a pickup greeting and optional hold music while the agent is working. Hold music has its own off switch; a missing local music asset leaves it silent. The personal recording is not distributed: see [hold music](ios/native/HoldMusic.md). Calls respect Calls settings, quiet hours, Focus and outstanding-call safety. Ordinary calls no longer have daily or spacing caps. An unanswered or declined call reports its outcome without a follow-up notification.
+
+**Messages and notifications go through Nod, not Voicestack.** The Voicestack sender accepts calls only; it is not a general message-delivery tool. [iPhone setup](ios/SETUP.md#agent-initiated-alerts-and-calls) covers the authorized call path. Source for the opt-in Open Voice transport and isolated SDK runtime is also included; it is experimental and disabled by default, not proof of a working deployment.
 
 During voice mode, Voicestack automatically speaks the selected session's assistant prose. The agent can keep a spoken answer short and put longer material in fenced blocks that remain available to read. Tool results and reasoning aren't narrated. See [conversation behavior](docs/DEVELOPMENT.md#conversation-behavior) for route-specific interruption limits.
 
@@ -66,7 +68,7 @@ Generation verifies renderer resources, updates the Xcode project and presentati
 
 First enrollment requires a one-use secret in signed configuration; there's no runtime pairing-entry screen. Protect enrollment builds and artifacts as credentials; regenerate empty UPDATE configuration after enrollment. Use Voicestack's own revocable OpenChamber client, never another application's token. The bridge's offline deployment preflight is required before `serve`.
 
-Once provisioned and paired, pick a session and start or answer a call. Configure microphone, notification and call permissions, quiet hours and speaker routing. Urgent calls remain policy-limited and don't bypass Focus. Revoking the dedicated desktop client cuts off its bridge access. [Install links](ios/shared/INSTALL_POLICY.md) default to deny and need an explicit matching native/bridge policy.
+Once provisioned and paired, pick a session and start or answer a call. Configure microphone and call permissions, quiet hours and speaker routing. Urgent calls remain policy-limited and don't bypass Focus. Revoking the dedicated desktop client cuts off its bridge access. Install links default to deny; the native client accepts only its exact configured manifest, not arbitrary links.
 
 ## Speech contracts and model choices
 

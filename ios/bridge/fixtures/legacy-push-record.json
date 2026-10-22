@@ -1,7 +1,7 @@
 {
   "request": {
     "id": "b21-urgent-20261015-1",
-    "session": "ses_example0000000000000000000",
+    "session": "ses_SYNTHETIC0017",
     "kind": "urgent-call",
     "reason": "decision",
     "title": "Synthetic legacy call",
@@ -14,7 +14,7 @@
   "testOverride": {
     "runID": "b22-20261016",
     "reachoutID": "b21-urgent-20261015-1",
-    "session": "ses_example0000000000000000000",
+    "session": "ses_SYNTHETIC0017",
     "build": 22,
     "deviceID": "phone",
     "issuedAt": 1792121400000,

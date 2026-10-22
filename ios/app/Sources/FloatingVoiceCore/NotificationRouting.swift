@@ -33,24 +33,3 @@ public enum NotificationRouteFailure: String, Codable, Error, Sendable {
     }
 }
 
-/// A cold-start response may precede active/protected data/model readiness.
-/// Keep it until drain is allowed; concurrent foreground/delegate drains cannot duplicate it.
-@MainActor public final class NotificationTapQueue {
-    public struct Tap: Equatable, Sendable {
-        public let id: String
-        public let category: String
-        public init(id: String, category: String) { self.id = id; self.category = category }
-    }
-    private var pending: Tap?
-    private var draining = false
-    public init() {}
-    public func enqueue(_ tap: Tap) { pending = tap }
-    public func drain(ready: () -> Bool, route: (Tap) async throws -> Void) async throws {
-        guard !draining, ready() else { return }
-        draining = true; defer { draining = false }
-        while ready(), let tap = pending {
-            pending = nil
-            try await route(tap)
-        }
-    }
-}

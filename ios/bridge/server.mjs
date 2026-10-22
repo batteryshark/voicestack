@@ -1,14 +1,17 @@
-// Project-owned bridge. Node standard library only; no shared service configuration writes.
+// Project-owned bridge. Candidate WS uses pinned ws; no shared service configuration writes.
 import http from 'node:http';
 import fs from 'node:fs';
-import { deploymentPreflight } from './deployment-preflight.mjs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { Transform, pipeline } from 'node:stream';
 import { fileURLToPath } from 'node:url';
+import { deploymentPreflight } from './deployment-preflight.mjs';
 import { eventLifetime } from './event-lifetime.mjs';
 import { PushStore } from './push-store.mjs';
 import { PushService } from './push-service.mjs';
+import { Maintenance } from './maintenance.mjs';
+import { OpenVoiceControl, CONTROL_PREFIX } from './open-voice-control.mjs';
+import { OpenVoiceMedia } from './open-voice-media.mjs';
 import { createAPNs } from './apns.mjs';
 import { startSender } from './push-socket.mjs';
 import { Capabilities, exactReference, readAsset, validateBytes, assetDescription, canvasAssociation, canvasShowAssociation, showRevision, byteRange, check, phoneProjection, learnCanvasOrigin, learnCanvasMessageOrigins } from './rich-content.mjs';
@@ -238,8 +241,18 @@ export class SessionEvents extends Transform {
 
 export function createBridge({ credentials, discover = discoverDesktop, chief = readChief, ttsPort = 8444, asrPort = 8446,
   maxUpstreams = 12, jsonDeadlineMs = 5000, requestDeadlineMs = 120000, diagnostic = () => {}, eventClock = globalThis, push,
-  ocClient = new OpenChamberClient({ diagnostic }) }) {
+  ocClient = new OpenChamberClient({ diagnostic }), openVoiceCandidate, openVoiceMedia, maintenance, ownerStats = () => ({}) }) {
+  let media;
+  const hasMethods = openVoiceMedia?.enabled === true
+    && ['openSegment', 'submit', 'synthesize'].every(k => typeof openVoiceMedia.adapter?.[k] === 'function');
+  const hasAdapter = hasMethods && openVoiceMedia.adapter?.readyForCalls !== false;
+  const candidate = openVoiceCandidate?.enabled === true ? new OpenVoiceControl({ ...openVoiceCandidate, push,
+    mediaAvailable: () => openVoiceMedia?.adapter?.readyForCalls !== false && (media ? media.available() : hasAdapter),
+    closeOwner: owner => { media?.fence(owner); openVoiceCandidate.closeOwner?.(owner); },
+    authenticateDevice: authorization => credentials.device(authorization) }) : null;
+  if (candidate && (hasAdapter || hasMethods && openVoiceMedia.ownerAssembly === true)) media = new OpenVoiceMedia({ ...openVoiceMedia, control: candidate, diagnostic });
   const sockets = new Set(); let connections = 0;
+  let activeHandlers = 0, startupChecks = 0;
   let activeUpstreams = 0, peakUpstreams = 0;
   function open(...args) {
     refuse(activeUpstreams < maxUpstreams, 429, 'bridge upstream work limit');
@@ -430,6 +443,7 @@ export function createBridge({ credentials, discover = discoverDesktop, chief = 
     up.end(data);
   }
   const server = http.createServer({ maxHeaderSize: 8192 }, async (req, res) => {
+    activeHandlers++;
     const started = performance.now(), stage = diagnosticStage(req.url);
     const proposedAttempt = req.headers['x-fv-attempt'];
     const attempt = typeof proposedAttempt === 'string' && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(proposedAttempt) ? proposedAttempt : crypto.randomUUID();
@@ -442,6 +456,33 @@ export function createBridge({ credentials, discover = discoverDesktop, chief = 
     req.once('aborted', () => controller.abort());
     res.once('close', () => { clearTimeout(deadline); controller.abort(); });
     try {
+      if (maintenance?.held) {
+        // Admission at dispatch also covers requests on pre-existing keepalive
+        // sockets. Only observation and existing call continuation remain open.
+        const observation = (req.method === 'GET' && !req.url.split('?')[0].endsWith('/events'))
+          || (req.method === 'POST' && /^\/floating-voice\/v1\/sessions\/ses_[a-zA-Z0-9]{1,100}\/canvas(?:-show)?\/status$/.test(req.url));
+        const continuation = (req.method === 'POST' && (req.url === PREFIX + '/v1/push/events'
+          || /^\/floating-voice\/voice\/v1\/calls\/[0-9a-f-]{36}\/(accept|decline|media|media-ready|end)$/.test(req.url)))
+          || (req.method === 'PUT' && [CONTROL_PREFIX + '/device-capability', PREFIX + '/v1/push/settings', PREFIX + '/v1/push/enrollment'].includes(req.url));
+        refuse(observation || continuation, 503, 'bridge maintenance hold');
+      }
+      // Candidate namespace is closed before legacy device-only authentication.
+      if (req.url.startsWith('/floating-voice/voice/')) {
+        try {
+          refuse(candidate, 404);
+          refuse(req.headers.origin === undefined && req.url.length <= 256 && !/[\\%#?]/.test(req.url), 403);
+          refuse(req.url.startsWith(CONTROL_PREFIX + '/'), 404);
+          const token = /^Bearer ([A-Za-z0-9_-]{1,512})$/.exec(req.headers.authorization || '')?.[1];
+          refuse(token, 401);
+          let obj;
+          const bodyTimer = setTimeout(() => req.destroy(), 5000);
+          try { obj = req.method === 'GET' ? {} : await body(req, 4096); } finally { clearTimeout(bodyTimer); }
+          if (req.method === 'GET') refuse(!req.headers['transfer-encoding'] && (!req.headers['content-length'] || req.headers['content-length'] === '0'), 400);
+          const result = await candidate.http(req.method, req.url.slice(CONTROL_PREFIX.length), token, obj);
+          json(res, 200, result);
+        } catch (e) { json(res, [400, 401, 403, 404, 409, 410, 413, 415, 429, 503].includes(e.status) ? e.status : 503, { error: 'control_refused' }); }
+        return;
+      }
       const url = route(req);
       if (url === '/v1/pair' && req.method === 'POST') { const obj = await body(req, 1024); keys(obj, ['bootstrap', 'credential']); json(res, 200, credentials.pair(obj.bootstrap, obj.credential)); return; }
       const device = credentials.device(req.headers.authorization);
@@ -722,8 +763,19 @@ export function createBridge({ credentials, discover = discoverDesktop, chief = 
       }
       throw new Refusal(404, 'route not allowed');
     } catch (e) { if (!res.headersSent && !res.destroyed) json(res, e.status || 503, { error: e.status ? e.message : 'bridge dependency unavailable' }); else res.destroy(); }
+    finally { activeHandlers--; }
   });
   server.on('upgrade', (req, socket, head) => {
+    // Existing candidate invitations may attach their media while draining;
+    // their durable nonterminal call remains a seal blocker throughout attach.
+    if (maintenance?.held && !req.url.startsWith('/floating-voice/v1/realtime')) {
+      socket.end('HTTP/1.1 503 Refused\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'); return;
+    }
+    if (req.url.startsWith('/floating-voice/v1/realtime')) {
+      if (media) media.upgrade(req, socket, head).catch(() => socket.destroy());
+      else socket.end('HTTP/1.1 404 Refused\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+      return;
+    }
     // WebSocket upgrades never enter http.createServer's request handler. Capture
     // the missing ASR boundary without retaining URL, bearer, PCM or transcript.
     const started = performance.now();
@@ -778,10 +830,28 @@ export function createBridge({ credentials, discover = discoverDesktop, chief = 
     sockets.add(s); s.on('close', () => { sockets.delete(s); connections--; });
   });
   server.requestTimeout = 15000; server.headersTimeout = 10000; server.keepAliveTimeout = 1000;
-  server.shutdown = () => { for (const s of sockets) s.destroy(); server.close(); };
+  const finalizers = [];
+  server.shutdown = () => { for (const fn of finalizers) fn(); media?.close(); for (const s of sockets) s.destroy(); server.close(); };
   server.workStats = () => ({ activeUpstreams, peakUpstreams });
+  server.openVoiceStats = () => media?.stats() ?? { sessions: 0, pendingJobs: 0, pendingUpgrades: 0 };
+  server.localStats = () => ({ connections, activeHandlers, activeUpstreams, startupChecks,
+    ...ownerStats(),
+    ...(push?.localStats() ?? {}),
+    mediaSessions: media?.stats().sessions ?? 0, mediaJobs: media?.stats().pendingJobs ?? 0,
+    mediaUpgrades: media?.stats().pendingUpgrades ?? 0, mediaPCM: media?.stats().inputPCMBytes ?? 0,
+    mediaRaw: media?.stats().rawBytes ?? 0 });
+  if (maintenance) {
+    maintenance.counts = server.localStats;
+    maintenance.listening = () => server.listening;
+    maintenance.stopListening = () => server.listening ? new Promise((resolve, reject) => server.close(e => e ? reject(e) : resolve())) : Promise.resolve();
+  }
+  if (candidate) {
+    const timer = setInterval(() => { push.serial(() => candidate.recover()).catch(() => {}); }, 1000);
+    timer.unref(); finalizers.push(() => clearInterval(timer));
+  }
   server.once('listening', () => {
-    ocClient.check(discover).catch(() => ocClient.note('self_check_failed'));
+    startupChecks++;
+    ocClient.check(discover).catch(() => ocClient.note('self_check_failed')).finally(() => { startupChecks--; });
   });
   return server;
 }
@@ -797,8 +867,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   else if (command === 'serve') {
     const port = Number(arg);
     refuse(Number.isInteger(port) && port > 1024 && port < 65536, 400, 'explicit loopback port required');
-    // Admission precedes credentials/diagnostics/push state and socket creation.
-    // Library createBridge/legacy test compatibility is deliberately unchanged.
     deploymentPreflight();
     const credentials = new Credentials(file);
     const diagnostic = rotatingDiagnostics(path.join(path.dirname(file), 'bridge-stages.jsonl'));
@@ -813,7 +881,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         return request;
       } });
     };
-    let push, sender;
+    let push, sender, maintenance, owner, server;
     // Deployment is deliberately opt-in; this lane never restarts the installed bridge.
     if (process.env.FV_PUSH_ENABLED === '1') {
       push = new PushService({ store: new PushStore(path.join(path.dirname(file), 'push')), apns: createAPNs(), chief: readChief, activeDevices: () => credentials.activeDevices(), diagnostic,
@@ -826,12 +894,45 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
             refuse((record.id ?? record.info?.id) === request.messageID && (!record.info?.sessionID || record.info.sessionID === request.session), 409, 'origin message unavailable');
           }
         } });
-      sender = await startSender(push);
+      maintenance = new Maintenance(push.store.directory);
+      push.maintenance = maintenance;
     }
-    const server = createBridge({ credentials, push, diagnostic, ocClient });
-    server.listen(port, '127.0.0.1', () => console.error(`Bridge listening on port ${port}`));
-    const shutdown = async () => { server.shutdown(); await sender?.close(); process.exit(0); };
-    process.on('SIGTERM', shutdown);
-    process.on('SIGINT', shutdown);
+    // Disabling push must not bypass a persisted hold in its existing directory.
+    if (!maintenance && fs.existsSync(path.join(path.dirname(file), 'push'))) maintenance = new Maintenance(path.join(path.dirname(file), 'push'));
+    try {
+      const candidateEnabled = process.env.FV_OPEN_VOICE_ENABLED === '1';
+      const mediaEnabled = process.env.FV_OPEN_VOICE_MEDIA_ENABLED === '1';
+      if (candidateEnabled || mediaEnabled) {
+        refuse(candidateEnabled && mediaEnabled && push, 503, 'explicit owner candidate/media/push opt-ins required');
+        const { readOpenVoiceConfig, startOpenVoiceBootstrap } = await import('./open-voice-bootstrap.mjs');
+        owner = await startOpenVoiceBootstrap({ config: readOpenVoiceConfig(process.env.FV_OPEN_VOICE_CONFIG), push });
+      }
+      server = createBridge({ credentials, push, diagnostic, ocClient, maintenance,
+        openVoiceCandidate: owner?.candidate, openVoiceMedia: owner?.media, ownerStats: () => owner?.stats() ?? {} });
+      const listen = () => server.listening ? Promise.resolve() : new Promise((resolve, reject) => {
+        const failed = e => { server.removeListener('listening', ready); reject(e); };
+        const ready = () => { server.removeListener('error', failed); console.error(`Bridge listening on port ${port}`); resolve(); };
+        server.once('error', failed); server.once('listening', ready); server.listen(port, '127.0.0.1');
+      });
+      if (maintenance) maintenance.startListening = listen;
+      if (maintenance && owner) maintenance.refresh = owner.refresh;
+      if (owner) await owner.attach(push.openVoice);
+      if (push) sender = await startSender(push);
+      if (!maintenance?.held) await listen();
+      let shuttingDown;
+      const shutdown = () => shuttingDown ??= (async () => {
+        server.shutdown();
+        await owner?.close();
+        await sender?.close();
+        while (server.openVoiceStats().pendingJobs || server.openVoiceStats().pendingUpgrades) await new Promise(resolve => setTimeout(resolve, 25));
+        process.exit(0);
+      })().catch(() => { shuttingDown = undefined; diagnostic({ stage: 'owner_shutdown', category: 'work_pending' }); });
+      process.on('SIGTERM', shutdown);
+      process.on('SIGINT', shutdown);
+    } catch {
+      server?.shutdown();
+      await Promise.all([sender?.close(), owner?.close()]);
+      throw new Error('bridge_startup_refused');
+    }
   } else { throw new Error('use provision PRIVATE_STORE PRIVATE_BUILD_CONFIG | revoke PRIVATE_STORE DEVICE_ID | serve PRIVATE_STORE PORT'); }
 }

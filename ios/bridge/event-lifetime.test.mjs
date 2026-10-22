@@ -4,6 +4,7 @@ import http from 'node:http';
 import { once } from 'node:events';
 import { eventLifetime } from './event-lifetime.mjs';
 import { createBridge } from './server.mjs';
+import { unpairedDesktop } from './fixtures/synthetic-desktop.mjs';
 
 class Clock {
   now = 0; next = 0; jobs = new Map();
@@ -54,7 +55,7 @@ test('client cancellation releases all event timers immediately', () => {
   assert.equal(clock.jobs.size, 0);
 });
 
-test('loopback SSE flushes quiet headers, emits heartbeat, rotates with HTTP end and correlates reason', async () => {
+test('loopback SSE flushes quiet headers, emits heartbeat, rotates with HTTP end and correlates reason', async t => {
   const clock = new Clock(), logs = [];
   let upstreamResponse;
   const fake = http.createServer((req, res) => {
@@ -62,7 +63,7 @@ test('loopback SSE flushes quiet headers, emits heartbeat, rotates with HTTP end
     else { upstreamResponse = res; res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.flushHeaders(); }
   });
   fake.listen(0, '127.0.0.1'); await once(fake, 'listening');
-  const bridge = createBridge({ credentials: { device: () => ({ sessionID: 'ses_fixture', generation: 'fixture' }) }, discover: () => fake.address().port, eventClock: clock, diagnostic: e => logs.push(e) });
+  const bridge = createBridge({ credentials: { device: () => ({ sessionID: 'ses_fixture', generation: 'fixture' }) }, ...unpairedDesktop(t, fake), eventClock: clock, diagnostic: e => logs.push(e) });
   bridge.listen(0, '127.0.0.1'); await once(bridge, 'listening');
   const attempt = '12345678-1234-1234-1234-123456789abc';
   try {

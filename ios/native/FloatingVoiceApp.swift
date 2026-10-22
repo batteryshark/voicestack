@@ -35,7 +35,7 @@ enum InstalledBuild {
     @Published var routeRetryInProgress = false
     @Published var historyGap = false
     var turnControls: VoiceTurnControls {
-        VoiceTurnControls(status: status, bargeIn: { [weak self] in self?.controller?.bargeIn() })
+        VoiceTurnControls(status: status, bargeIn: { [weak self] in self?.holdMusic.end(); self?.controller?.bargeIn() })
     }
     var principalError: String? { PrincipalError.message(error ?? status.lastError, captureRunning: surface.captureRunning) }
     @Published var messages: [MessageRow] = []
@@ -63,6 +63,45 @@ enum InstalledBuild {
     var historyVisible = false
     @Published var link: LinkDestination?
     let coordinator = AudioSessionCoordinator()
+    private var pickupChiefLease: TargetLease?
+    /// Pickup cues use the normal Voicestack voice and output path (Speaker cue tickets).
+    private lazy var pickupTiming: PickupCueTiming = PickupCueTiming(prepare: { [weak self] text in
+        self?.controller?.speaker.prepareCue(text)
+    }, play: { [weak self] ticket, ended in
+        guard let self, self.hasCall, self.openVoice == nil, self.calls.lifecycle.mayRunMedia,
+              let speaker = self.controller?.speaker else { ticket.cancel(); return }
+        StageDiagnostics.shared.record(.playback,.begin,status:441)
+        speaker.enqueueCue(ticket,label:"pickup-cue",ended:{ success in
+            StageDiagnostics.shared.record(.playback,success ? .complete : .failed,status:442)
+            ended(success)
+        })
+    }, mayFollowUp: { [weak self] in
+        guard let self else { return false }
+        return self.hasCall && self.openVoice == nil && self.calls.lifecycle.mayRunMedia && self.calls.hasEverBeenMediaReady
+            && self.status.running && self.status.connection == "connected" && !self.status.hearing
+            && !self.status.busy && !self.status.sending && self.status.holding == nil && !self.status.outputMuted && self.status.lastError == nil
+            && self.controller?.speaker.active == false && self.backend?.store?.active == false
+    })
+    @Published private(set) var holdMusicEnabled = UserDefaults.standard.object(forKey:"holdMusic.enabled") as? Bool ?? true
+    private lazy var holdMusic: ProcessingHoldMusic = ProcessingHoldMusic(start: { [weak self] in
+        guard let self, self.hasCall, self.openVoice == nil, self.calls.lifecycle.mayRunMedia,
+              self.status.running, self.status.connection == "connected", !self.status.hearing,
+              let speaker = self.controller?.speaker, !speaker.active,
+              let ticket = BundledHoldMusicTicket() else { self?.holdMusic.end(); return }
+        let generation = self.holdMusic.playbackGeneration
+        StageDiagnostics.shared.record(.playback,.begin,status:431)
+        speaker.enqueueHold(ticket,completion:{ [weak self] success in
+            StageDiagnostics.shared.record(.playback,success ? .complete : .failed,status:432)
+            self?.holdMusic.clipEnded(success,generation:generation)
+        })
+    }, stop: { [weak self] in
+        if self?.controller?.speaker.isHolding == true { StageDiagnostics.shared.record(.playback,.cancelled,status:433) }
+        self?.controller?.speaker.stopHold()
+    })
+    func setHoldMusicEnabled(_ enabled: Bool) {
+        holdMusicEnabled = enabled; UserDefaults.standard.set(enabled,forKey:"holdMusic.enabled")
+        holdMusic.enabled = enabled
+    }
     private var probeMode: Bool { DeviceAudioProbe.enabled || ProcessInfo.processInfo.arguments.contains("-FVSimulatorProof") }
     lazy var calls: CallCoordinator = {
         let calls: CallCoordinator
@@ -73,8 +112,15 @@ enum InstalledBuild {
         calls = CallCoordinator(audio: coordinator)
 #endif
         calls.beginMedia = { [weak self] epoch in await self?.beginVoice(callEpoch: epoch) == true }
+        calls.pickupCue = { [weak self] in
+            guard let self, self.hasCall, self.openVoice == nil else { return }
+            let isChief = self.pickupChiefLease != nil && self.pickupChiefLease == self.backend?.lease && self.pickupChiefLease == self.calls.lifecycle.target
+            self.pickupTiming.begin(greeting:isChief ? "Hey, it’s the chief" : "Connected")
+        }
         calls.pauseMedia = { [weak self] in
             guard let self else { return }
+            self.pickupTiming.cancel()
+            self.holdMusic.end()
             self.voiceLifecycle.invalidate()
             self.surface.preparing = false
             self.controller?.speaker.pause()
@@ -85,7 +131,28 @@ enum InstalledBuild {
         }
         calls.endMedia = { [weak self] in self?.endVoiceMedia() }
         calls.onTerminal = { [weak self] in self?.reconcileAfterCall() }
-        calls.onDeliberateEnd = { [weak self] session in self?.enqueueVoiceEnded(session) }
+        calls.onDeliberateEnd = { [weak self] session in
+            guard let self else { return }
+            if let candidate = self.openVoice, session.target == candidate.target {
+                let call = candidate.invitation.owner.callUUID
+                let intent: UUID
+                do { intent = try candidate.prepareDeliberateEnd() }
+                catch { self.error = "Call end could not be saved; review without retry"; return }
+                self.openVoiceEndCall = call
+                let assertion = UIApplication.shared.beginBackgroundTask(withName:"New conversation end") { [weak self] in
+                    Task { @MainActor in if self?.openVoiceEndCall == call { self?.openVoiceEnd?.cancel() } }
+                }
+                self.openVoiceEnd = Task { [weak self] in
+                    defer { if assertion != .invalid { UIApplication.shared.endBackgroundTask(assertion) } }
+                    await candidate.shutdown(closeControl:false)
+                    do { try Task.checkCancellation(); try await candidate.dispatchDeliberateEnd(intent) }
+                    catch { if self?.hasCall == false { self?.error = "Call end delivery uncertain; review without retry" } }
+                    await candidate.shutdown()
+                    self?.flushOpenVoiceReceipt(call:call)
+                    if self?.openVoiceEndCall == call { self?.openVoiceEndCall = nil; self?.openVoiceEnd = nil }
+                }
+            } else { self.enqueueVoiceEnded(session) }
+        }
         calls.recoveryPaused = { [weak self] _ in self?.showRecoveryPause() }
         calls.mediaReady = { [weak self] in
             self?.routeRetryInProgress = false; self?.routeRetryAvailable = false
@@ -130,6 +197,34 @@ enum InstalledBuild {
             .streamIdleSeconds: backend?.streamLiveness?.idleSeconds ?? 0]))
     }
     private(set) var backend: RemoteSessionBackend?
+    private var openVoice: OpenVoiceBackend?
+    private var openVoiceCallOwner: IncomingCallOwner?
+    func revokeOpenVoiceReadiness() {
+        guard let candidate = openVoice, let owner = openVoiceCallOwner else { return }
+        calls.revokeCandidateAuthority(candidate,owner:owner)
+    }
+    private var openVoiceEnd: Task<Void,Never>?
+    private var openVoiceEndCall: UUID?
+    private var openVoiceReceipt: (call: UUID, send: () -> Void)?
+    private lazy var openVoiceJournal = OpenVoiceOperationJournal(file:URL.applicationSupportDirectory.appendingPathComponent("OpenVoice/operation-intents.json"))
+    func deferOpenVoiceReceipt(_ call: UUID, send: @escaping () -> Void) -> Bool {
+        guard openVoice?.invitation.owner.callUUID == call, openVoiceReceipt == nil else { return false }
+        openVoiceReceipt = (call,send); return true
+    }
+    private func flushOpenVoiceReceipt(call: UUID) {
+        guard openVoiceReceipt?.call == call else { return }
+        let send = openVoiceReceipt?.send; openVoiceReceipt = nil; send?()
+    }
+    func reviewOpenVoiceOperation(using control: OpenVoiceRecipientControl) async {
+        defer { control.close() }
+        guard !hasCall, UIApplication.shared.isProtectedDataAvailable,
+              let record = openVoiceJournal.records.last else { error = "No pilot operation available for review"; return }
+        do {
+            let snapshot = try await openVoiceJournal.reconcile(record.id,using:control)
+            guard !hasCall else { return }
+            error = "Pilot operation: " + (snapshot["state"].string ?? "unknown") + " · no resend"
+        } catch { if !hasCall { self.error = "Pilot operation unavailable; no resend" } }
+    }
     private func replaceBackend(_ backend: RemoteSessionBackend?) {
         // Backend identity and picker request ownership change together, with
         // no suspension point where a retired request can strand the spinner.
@@ -309,7 +404,17 @@ enum InstalledBuild {
         updateConversation()
     }
     func updateConversation() {
+        if !hasCall || !calls.lifecycle.mayRunMedia || !status.running || status.connection != "connected" || status.lastError != nil {
+            holdMusic.end()
+        } else { holdMusic.processing(backend?.connection == "connected" && backend?.store?.active == true) }
+        // Pending cues only; mayFollowUp rechecks the live state before "I'm here".
+        if !hasCall { pickupTiming.cancel() }
         guard let backend else { return }
+        if openVoice != nil {
+            // History stays legacy history; candidate captions never inherit its rows.
+            if historyVisible { messages = backend.displayRecords.compactMap(MessageRow.init) }
+            objectWillChange.send(); return
+        }
         if let session = appVoiceSession, session.target != backend.lease { session.invalidate() }
         if let session = pendingVoiceEnded, session.target != backend.lease { session.invalidate() }
         if hasCall, joiningInvitation == nil, calls.lifecycle.target != nil, calls.lifecycle.target != backend.lease {
@@ -336,6 +441,29 @@ enum InstalledBuild {
         else if !review.contains(draft) { review.append(draft) }
     }
     /// Answer is explicit authority to select this invitation, not the previously viewed chief.
+    func joinOpenVoice(record: Data, push: PushInvitation, owner: IncomingCallOwner, control: OpenVoiceRecipientControl,
+                       allowed: () -> Bool) async throws -> TargetLease {
+        try owner.validate(calls.lifecycle)
+        guard openVoice == nil, openVoiceEnd == nil, openVoiceReceipt == nil else { throw ClientError("Prior pilot call cleanup pending") }
+        let candidate = try await OpenVoiceCallSession.accept(record:record,push:push,lifecycle:calls.lifecycle,
+            control:control,journal:openVoiceJournal,allowed:allowed)
+        do {
+            try owner.validate(calls.lifecycle)
+            try calls.registerCandidateAuthority(candidate,owner:owner)
+        }
+        catch { await candidate.shutdown(); throw error }
+        preparationEpoch += 1; preparation?.cancel(); preparation = nil
+        if !typed.isEmpty, let lease = backend?.lease { retainReview(BoundDraft(target:lease,text:typed)); typed = "" }
+        controller?.onReviewDraft = { [weak self] in self?.retainReview($0) }
+        controller?.suspendForReview(); controller?.stop(discardUnfinished:true)
+        controller = nil; voiceLifecycle.controller = nil
+        backend?.disconnect()
+        openVoice = candidate; openVoiceCallOwner = owner; openVoiceEnd = nil
+        surface.replaceBinding(target:candidate.target)
+        live = ""; cue = ""; error = nil
+        status = ConversationController.Status(); status.newConversation = true
+        return candidate.target
+    }
     func joinInvitation(_ context: ReachOutContext, owner: IncomingCallOwner) async throws -> TargetLease {
         try owner.validate(calls.lifecycle) // No mutation, including draft cleanup, before this fence.
         joiningInvitation = owner
@@ -362,9 +490,11 @@ enum InstalledBuild {
         try owner.validate(calls.lifecycle)
         guard let lease = backend.lease, lease.sessionID == context.session else { throw ClientError("Call ended") }
         selection = context.session; paired = true; updateConversation()
+        pickupChiefLease = (try? await backend.chief()) == context.session ? lease : nil
+        try owner.validate(calls.lifecycle)
         return lease
     }
-    func openReachOut(_ context: ReachOutContext, reviewBuild: Bool) async throws {
+    func openReachOut(_ context: ReachOutContext) async throws {
         try await NotificationRouting.step(.prepare) {
             guard !self.hasCall else { throw NotificationRouteFailure.targetChanged }
             let deadline = Date().addingTimeInterval(12)
@@ -386,7 +516,6 @@ enum InstalledBuild {
         let request = try await NotificationRouting.step(.present) {
             guard UIApplication.shared.applicationState == .active, UIApplication.shared.isProtectedDataAvailable else { throw NotificationRouteFailure.inactive }
             guard self.backend === routeBackend, routeBackend.lease == target, !self.hasCall else { throw NotificationRouteFailure.targetChanged }
-            if reviewBuild, let url = context.reviewURL, phoneLinkPolicy.install(url) == nil { throw NotificationRouteFailure.invalidContext }
             let records = routeBackend.displayRecords
             guard let sourceID = context.messageID ?? records.compactMap(MessageRow.init).last?.id,
                   let anchor = HistoryAnchor.resolve(sourceID, records: records) else { throw NotificationRouteFailure.messageUnavailable }
@@ -414,9 +543,6 @@ enum InstalledBuild {
             guard self.backend === routeBackend, routeBackend.lease == target,
                   UIApplication.shared.applicationState == .active, UIApplication.shared.isProtectedDataAvailable else { throw NotificationRouteFailure.targetChanged }
         }
-        if reviewBuild, let url = context.reviewURL {
-            link = LinkDestination(url: url)
-        }
     }
     func startVoice() async {
         voiceEndedScene.invalidate()
@@ -440,6 +566,7 @@ enum InstalledBuild {
         } catch { self.error = error.localizedDescription }
     }
     private func beginVoice(callEpoch: Int? = nil) async -> Bool {
+        if let candidate = openVoice { return await beginOpenVoice(candidate,callEpoch:callEpoch) }
         StageDiagnostics.shared.record(.startUI, .begin)
         guard callEpoch != nil || !surface.preparing else { StageDiagnostics.shared.record(.startUI, .failed, status: 1); return false }
         let owner = voiceLifecycle.requestStart()
@@ -482,6 +609,8 @@ enum InstalledBuild {
                         }
                     }, chiefPollInterval: 15, partialsProbe: { true }, speechWarmup: warmup)
                 self.controller = controller
+                controller.onAgentProcessing = { [weak self] active in self?.holdMusic.processing(active) }
+                controller.speaker.onReplyEnqueue = { [weak self] in self?.holdMusic.replyStarted() }
                 controller.outcomeDiagnostics = UtteranceOutcomeLog(stages: .shared)
                 voiceLifecycle.controller = controller
                 let binding = surface.replaceBinding(target: lease)
@@ -539,6 +668,73 @@ enum InstalledBuild {
         }
         return false
     }
+    private func beginOpenVoice(_ candidate: OpenVoiceBackend, callEpoch: Int?) async -> Bool {
+        guard let epoch = callEpoch, calls.lifecycle.admits(epoch), calls.lifecycle.mayRunMedia,
+              calls.lifecycle.target == candidate.target, openVoice === candidate else { return false }
+        let owner = voiceLifecycle.requestStart()
+        surface.preparing = true
+        defer { if voiceLifecycle.generation == owner { surface.preparing = false } }
+        do {
+            if controller == nil {
+                let audio = IOSAudio(coordinator:coordinator); self.audio = audio
+                audio.onRoutePaused = { [weak self] in self?.pauseRouteRecovery() }
+                audio.onRecoveryRequest = { [weak self] event in
+                    guard let self, self.openVoice === candidate else { return }
+                    switch event {
+                    case .interruptionBegan: self.calls.interrupted()
+                    case .mediaReset: self.calls.mediaReset()
+                    case .interruptionEnded,.routeChanged: break
+                    }
+                }
+                var settings = savedSettings
+                settings.app.target = candidate.target.sessionID; settings.app.sendMode = .manual
+                let controller = ConversationController(settings:settings,backend:candidate,
+                    synth:OpenVoicePreparedOnlySynthesizer(),output:audio,input:audio,
+                    makeRecognition:{ callbacks in OpenVoiceRecognition(client:candidate.pump.client,callbacks:callbacks,discardUnsentOnCancel:true) })
+                self.controller = controller; voiceLifecycle.controller = controller
+                controller.onCandidateInputFailure = { [weak self, weak candidate] failure in
+                    guard let self, let candidate, self.openVoice === candidate, self.calls.lifecycle.admits(epoch) else { return }
+                    self.calls.candidateInputFailed(candidate,ownerEpoch:epoch,failure:failure)
+                }
+                controller.onCandidateTerminalFailure = { [weak self, weak candidate] cause in
+                    guard let self, let candidate, self.openVoice === candidate, self.calls.lifecycle.admits(epoch) else { return }
+                    self.calls.candidateBackendFailed(candidate,ownerEpoch:epoch,cause:cause)
+                }
+                let binding = surface.replaceBinding(target:candidate.target)
+                controller.onReviewDraft = { [weak self] in self?.retainReview($0) }
+                controller.onStatus = { [weak self] status in
+                    guard let self, self.openVoice === candidate, self.surface.binding == binding else { return }
+                    self.status = status; self.surface.update(status:status,owner:binding)
+                }
+                controller.onCaption = { [weak self] event in
+                    guard let self, self.openVoice === candidate else { return }
+                    self.caption(event,owner:binding)
+                }
+                controller.onPrivateNotice = { [weak self] notice in
+                    guard self?.openVoice === candidate else { return }
+                    UIAccessibility.post(notification:.announcement,argument:notice.rawValue)
+                }
+                audio.onCaptureState = { [weak self] state in
+                    guard let self, self.openVoice === candidate else { return }
+                    self.surface.updateCapture(state,owner:binding)
+                }
+                try await candidate.startMedia()
+                guard openVoice === candidate, voiceLifecycle.isCurrent(owner), calls.lifecycle.admits(epoch), calls.lifecycle.mayRunMedia else { return false }
+            }
+            await voiceLifecycle.start(owner)
+            guard openVoice === candidate, voiceLifecycle.isCurrent(owner), calls.lifecycle.admits(epoch) else { return false }
+            let deadline = Date().addingTimeInterval(12)
+            while status.running && status.phase != "ready" && Date() < deadline && !Task.isCancelled {
+                try await Task.sleep(nanoseconds:50_000_000)
+                guard openVoice === candidate, voiceLifecycle.isCurrent(owner), calls.lifecycle.admits(epoch) else { return false }
+            }
+            return status.running && status.phase == "ready" && candidate.ready && !Task.isCancelled
+        } catch {
+            guard openVoice === candidate, calls.lifecycle.admits(epoch) else { return false }
+            self.error = "New conversation could not become ready; no legacy fallback"
+            return false
+        }
+    }
     private func pauseRouteRecovery() {
         // onRoutePaused is the FAILED native repair boundary (throws, no frames,
         // or exhausted budget). Successful graph/route restarts never enter it.
@@ -589,11 +785,26 @@ enum InstalledBuild {
         }
     }
     private func endVoiceMedia() {
+        pickupChiefLease = nil
+        pickupTiming.cancel()
+        holdMusic.end()
         appVoiceSession?.invalidate(); appVoiceSession = nil
         routeRetryAvailable = false; routeRetryInProgress = false
         if error == RouteRecoveryNotice.paused { error = nil }
         voiceLifecycle.invalidate()
         surface.preparing = false
+        if let candidate = openVoice {
+            controller?.onReviewDraft = { [weak self] in self?.retainReview($0) }
+            controller?.suspendForReview(); controller?.stop(discardUnfinished:true)
+            candidate.closeMedia(); openVoice = nil; openVoiceCallOwner = nil
+            controller = nil; voiceLifecycle.controller = nil; audio = nil
+            let end = openVoiceEnd
+            Task { [weak self] in
+                await candidate.shutdown(closeControl:end == nil)
+                if end == nil { self?.flushOpenVoiceReceipt(call:candidate.invitation.owner.callUUID) }
+            }
+            return
+        }
         guard let controller, !stopping else { return }
         stopping = true; defer { stopping = false }
         // Stop is not Send: fence recognition and discard unfinished words, never flush to a session.
@@ -607,6 +818,21 @@ enum InstalledBuild {
         updateConversation()
     }
     func sendTyped() async {
+        if let candidate = openVoice {
+            let text = typed
+            guard !text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else { return }
+            typed = ""; let binding = surface.binding
+            surface.beginTypedTurn(text,owner:binding)
+            do {
+                try await candidate.submitReviewedText(text)
+                guard openVoice === candidate, surface.binding == binding else { return }
+                surface.typedPosted(text,owner:binding)
+            } catch {
+                retainReview(BoundDraft(target:candidate.target,text:text))
+                if openVoice === candidate, surface.binding == binding { self.error = "Message delivery uncertain; review without retry" }
+            }
+            return
+        }
         guard let backend, let lease = backend.lease, !typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let text = typed; typed = ""
         let binding = surface.binding
@@ -621,6 +847,7 @@ enum InstalledBuild {
         updateConversation()
     }
     func stopReply() async {
+        holdMusic.end()
         if controller?.status.running == true { await controller?.stopReply() }
         else if let backend, let lease = backend.lease {
             do { _ = try await backend.interrupt(target: lease) } catch { self.error = "Reply: " + error.localizedDescription }
@@ -631,6 +858,14 @@ enum InstalledBuild {
     }
     func caption(_ event: CaptionEvent, owner: UUID) {
         guard owner == surface.binding else { return }
+        switch event {
+        case .youStarted, .youSpeaking, .youLive, .youFinal, .posted, .discarded, .chiefQueued, .chiefFinalReceived, .chiefStarted, .chiefUnavailable:
+            pickupTiming.cancel()
+        default: break
+        }
+        if hasCall && openVoice == nil {
+            holdMusic.enabled = holdMusicEnabled; holdMusic.caption(event)
+        }
         switch event {
         case .chiefStarted: // PhoneModel's speech error comes from the optional TTS voice list.
             if error?.hasPrefix("Speech service at ") == true { error = nil }
@@ -985,6 +1220,8 @@ struct CallAudioSettings: View {
     @ObservedObject var model: PhoneModel
     var body: some View {
         Section("Call audio") {
+            Toggle("Hold music",isOn:Binding(get:{ model.holdMusicEnabled },set:{ model.setHoldMusicEnabled($0) }))
+                .accessibilityIdentifier("voice.holdMusic")
             HStack { Text("Choose audio route"); Spacer(); CallRoutePicker().frame(width: 44, height: 44) }
             if model.hasCall {
                 Button(model.calls.lifecycle.state == .held ? "Resume call" : "Hold call") { model.calls.hold(model.calls.lifecycle.state != .held) }.accessibilityIdentifier("voice.hold")

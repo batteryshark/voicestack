@@ -10,7 +10,7 @@ import { classifySender } from './sender.mjs';
 const fixture = JSON.parse(fs.readFileSync(new URL('../shared/opencode240-fixture.json', import.meta.url)));
 const sid = fixture.sessionID;
 
-test('2.4.0 fresh synthetic idle pages preserve fixture IDs/cursors and decorate only user records', () => {
+test('2.4.0 captured idle pages preserve source IDs/cursors and decorate only user records', () => {
   for (const page of [fixture.latestPage, fixture.olderPage]) {
     const before = structuredClone(page);
     const projected = phoneProjection(page);

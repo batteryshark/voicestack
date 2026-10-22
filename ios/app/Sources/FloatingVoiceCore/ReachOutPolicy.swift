@@ -52,6 +52,13 @@ public struct ReachOutPolicy: Codable, Equatable, Sendable {
         let now = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
         return start == end || (start < end ? now >= start && now < end : now >= start || now < end)
     }
+    public func localCallsAllowed(at date: Date) -> Bool { isValid && callsEnabled && !isQuiet(at:date) }
+    public func quietUntil(at date: Date) -> Date? {
+        guard isQuiet(at:date), isValid, quietHoursEnabled, quietStart != quietEnd,
+              let end = minutes(quietEnd), let zone = TimeZone(identifier:timeZone) else { return nil }
+        var calendar = Calendar(identifier:.gregorian); calendar.timeZone = zone
+        return calendar.nextDate(after:date,matching:DateComponents(hour:end/60,minute:end%60),matchingPolicy:.nextTime,repeatedTimePolicy:.first)
+    }
 
     /// Local display/eligibility only: never authorizes PushKit handling or replaces server policy.
     /// Restrictive edits apply immediately; enabling waits for an identical, fresh acknowledgement.

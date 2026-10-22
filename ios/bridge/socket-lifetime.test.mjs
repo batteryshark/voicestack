@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { once } from 'node:events';
 import { setImmediate } from 'node:timers/promises';
 import { createBridge } from './server.mjs';
+import { unpairedDesktop } from './fixtures/synthetic-desktop.mjs';
 
 test('keep-alive proxy and SSE cycles keep socket close listeners bounded without warnings', { timeout: 10000 }, async t => {
   const warnings = [];
@@ -25,7 +26,7 @@ test('keep-alive proxy and SSE cycles keep socket close listeners bounded withou
   upstream.listen(0, '127.0.0.1'); await once(upstream, 'listening');
   t.after(() => { upstream.closeAllConnections(); upstream.close(); });
   const device = { deviceID: 'fixture', sessionID: 'ses_fixture', generation: 'fixture', mode: 'explicit' };
-  const bridge = createBridge({ credentials: { device: () => device }, discover: () => upstream.address().port, ttsPort: upstream.address().port });
+  const bridge = createBridge({ credentials: { device: () => device }, ...unpairedDesktop(t, upstream), ttsPort: upstream.address().port });
   bridge.listen(0, '127.0.0.1'); await once(bridge, 'listening');
   t.after(() => bridge.shutdown());
   const sockets = [];
@@ -81,7 +82,7 @@ test('100 ASR duplex upgrades stay below the socket listener limit and release u
   });
   upstream.listen(0, '127.0.0.1'); await once(upstream, 'listening');
   t.after(() => upstream.close());
-  const bridge = createBridge({ credentials: { device: () => ({ deviceID: 'fixture' }) }, asrPort: upstream.address().port });
+  const bridge = createBridge({ credentials: { device: () => ({ deviceID: 'fixture' }) }, ...unpairedDesktop(t, upstream), asrPort: upstream.address().port });
   bridge.on('connection', socket => {
     sockets.push(socket);
     socket.on('newListener', event => { if (event === 'close') peak = Math.max(peak, socket.listenerCount('close') + 1); });
@@ -132,7 +133,7 @@ test('ASR client half-close preserves a delayed final transcript until the peer 
   });
   upstream.listen(0, '127.0.0.1'); await once(upstream, 'listening');
   t.after(() => { clearTimeout(replyTimer); for (const peer of peers) peer.destroy(); upstream.close(); });
-  const bridge = createBridge({ credentials: { device: () => ({ deviceID: 'fixture' }) }, asrPort: upstream.address().port });
+  const bridge = createBridge({ credentials: { device: () => ({ deviceID: 'fixture' }) }, ...unpairedDesktop(t, upstream), asrPort: upstream.address().port });
   bridge.listen(0, '127.0.0.1'); await once(bridge, 'listening');
   t.after(() => bridge.shutdown());
   const chunks = [];

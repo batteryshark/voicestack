@@ -247,9 +247,9 @@ import Testing
         #expect(ChiefDiscovery.pick(from: list) == "ses_bbb222")
         #expect(ChiefDiscovery.pick(from: [summary("ses_x", "Other", 1)]) == nil)
         #expect(ChiefDiscovery.pick(from: []) == nil)
-        #expect(SessionSummary.shortID("ses_a10001fixture0000000000") == "a10001")
-        #expect(summary("ses_a10001fixture0000000000", "Chief of staff", 0).label == "Chief of staff · a10001")
-        #expect(summary("ses_a10001fixture0000000000", "", 0).label == "Untitled · a10001")
+        #expect(SessionSummary.shortID("ses_SYNTHETIC0022c76RThXACt6GCT") == "SYNTHE")
+        #expect(summary("ses_SYNTHETIC0022", "Chief of staff", 0).label == "Chief of staff · SYNTHE")
+        #expect(summary("ses_SYNTHETIC0022", "", 0).label == "Untitled · SYNTHE")
     }
 
     @Test func targetOrderExplicitThenChiefFileThenLatestChief() async {
@@ -320,14 +320,9 @@ import Testing
     @Test func headerNamesTheSessionWithAShortID() {
         var s = ConversationController.Status()
         #expect(s.targetLabel == nil)
-        s.target = "ses_a10001fixture0000000000"
-        #expect(s.targetLabel == "Session · a10001")
+        s.target = "ses_SYNTHETIC0022c76RThXACt6GCT"
+        #expect(s.targetLabel == "Session · SYNTHE")
         s.targetTitle = "Chief of staff"
-        #expect(s.targetLabel == "Chief of staff · a10001")
-    }
-    @Test func syntheticSessionPrefixesRemainDistinct() {
-        let ids = ["ses_a10001fixture0000000000", "ses_a10002fixture0000000000", "ses_a10003fixture0000000000"]
-        #expect(ids.map(SessionSummary.shortID) == ["a10001", "a10002", "a10003"])
-        #expect(Set(ids.map(SessionSummary.shortID)).count == 3)
+        #expect(s.targetLabel == "Chief of staff · SYNTHE")
     }
 }

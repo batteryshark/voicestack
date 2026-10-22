@@ -32,10 +32,20 @@ export async function startSender(service) {
       handled = true;
       (async () => {
         try {
-          const o = JSON.parse(bytes.toString()); exact(o, ['command', 'request', 'id', 'dryRun']);
+          const o = JSON.parse(bytes.toString()); exact(o, ['command', 'request', 'id', 'dryRun', 'action']);
+          if (o.command === 'maintenance') {
+            exact(o, ['command', 'action']); requireThat(service.maintenance, 503);
+            socket.end(JSON.stringify(await service.maintenance.command(o.action)) + '\n'); return;
+          }
+          requireThat(o.action === undefined);
           requireThat(o.dryRun === undefined || typeof o.dryRun === 'boolean');
           let result;
-          if (o.command === 'send') { requireThat(o.id === undefined); result = await service.send(o.request, o.dryRun === true); }
+          if (o.command === 'reconcile-ended') {
+            exact(o,['command','request']); requireThat(service.maintenance,503);
+            await service.maintenance.refresh?.();
+            result = service.reconcileEnded(o.request);
+          }
+          else if (o.command === 'send') { requireThat(o.id === undefined); result = await service.send(o.request, o.dryRun === true); }
           else { requireThat(o.command === 'status' && stableID(o.id) && o.request === undefined); result = service.status(o.id); }
           socket.end(JSON.stringify(result) + '\n');
         } catch (e) { socket.end(JSON.stringify({ error: e.status ? e.message : 'sender unavailable', status: e.status || 503 }) + '\n'); }

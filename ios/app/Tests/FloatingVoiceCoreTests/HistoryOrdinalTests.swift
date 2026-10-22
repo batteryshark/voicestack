@@ -16,13 +16,13 @@ import Testing
         return (bytes, answer)
     }
     func row(_ store: ConversationStore) throws -> MessageRow {
-        try #require(store.records.compactMap(MessageRow.init).first { $0.id == "msg_freshOrdinalAnswer01" })
+        try #require(store.records.compactMap(MessageRow.init).first { $0.id == "msg_offline" })
     }
     func event(_ kind: String, _ ordinal: Int, _ text: String = "") -> ServerEvent {
         ServerEvent(
             type: "session.text." + kind,
             data: [
-                "sessionID": lease.sessionID, "assistantMessageID": "msg_freshOrdinalAnswer01", "ordinal": ordinal,
+                "sessionID": lease.sessionID, "assistantMessageID": "msg_offline", "ordinal": ordinal,
                 kind == "delta" ? "delta" : "text": text,
             ])
     }
@@ -50,7 +50,7 @@ import Testing
         try store.reconcile(history: snapshot, active: false, for: lease)
         let projected = try row(store)
         let record =
-            try JSONSerialization.jsonObject(with: store.records.first { MessageRow($0)?.id == "msg_freshOrdinalAnswer01" }!)
+            try JSONSerialization.jsonObject(with: store.records.first { MessageRow($0)?.id == "msg_offline" }!)
             as! [String: Any]
         let blocks = record["content"] as! [[String: Any]]
         #expect(blocks.filter { $0["type"] as? String == "text" }.count == 1)
@@ -82,14 +82,14 @@ import Testing
         try JSONSerialization.data(withJSONObject: [
             "data": [
                 [
-                    "id": "msg_freshOrdinalAnswer01", "type": "assistant", "content": content,
+                    "id": "msg_offline", "type": "assistant", "content": content,
                     "time": completed ? ["created": 1000, "completed": 2000] : ["created": 1000],
                 ]
             ]
         ])
     }
     func content(_ store: ConversationStore) throws -> [[String: Any]] {
-        let raw = try #require(store.records.first { MessageRow($0)?.id == "msg_freshOrdinalAnswer01" })
+        let raw = try #require(store.records.first { MessageRow($0)?.id == "msg_offline" })
         return (try JSONSerialization.jsonObject(with: raw) as! [String: Any])["content"] as! [[String: Any]]
     }
     @Test(arguments: [false, true]) func interleavedToolsAndTwoTextsKeepCanonicalOrder(_ snapshotFirst: Bool) throws {
@@ -157,7 +157,7 @@ import Testing
         let final = "Silent prefix. Live words. Finished offline."
         let updates = try store.reconcile(
             history: page([reason, text(final)]), active: false, for: lease, snapshot: store.beginHistorySnapshot())
-        #expect(updates.map(\.blockKey) == ["msg_freshOrdinalAnswer01:0"])
+        #expect(updates.map(\.blockKey) == ["msg_offline:0"])
         #expect(updates.map(\.suffix) == ["Finished offline."])
         updates.forEach { speech.consume($0) }
         _ = store.receive(event("ended", 0, final), eventID: "replayed-new-id", for: lease)
@@ -206,7 +206,7 @@ import Testing
         OfflineWire.page = snapshot
         try await backend.reconcile(granted)
         let projected = try #require(
-            backend.displayRecords.compactMap(MessageRow.init).first { $0.id == "msg_freshOrdinalAnswer01" })
+            backend.displayRecords.compactMap(MessageRow.init).first { $0.id == "msg_offline" })
         #expect(projected.text == answer)
     }
     @Test func realRemoteNarrationFeedsControllerTTSAndMainLogExactlyOnceAcrossReplayAndReconnect() async throws {

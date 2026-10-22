@@ -47,6 +47,7 @@ public enum VoiceCaptureState: Sendable { case off, starting, running, repairing
     @discardableResult public func replaceBinding(target: TargetLease?) -> UUID {
         let retainReply = target != nil && self.target == target
         binding = UUID(); self.target = target; latestUserID = nil; userIsLive = false
+        active = false; connection = "off" // Activity belongs to the retired binding, not the next call.
         capture = nil; connectedOnce = false; disconnectedAt = nil; connectionNotice = nil
         user = ""; reply = ""; pill.resetCaptions()
         if !retainReply { log = ConversationVoiceLog(); lastLogRecords = [] }
@@ -64,13 +65,14 @@ public enum VoiceCaptureState: Sendable { case off, starting, running, repairing
         }
         pill.handle(event)
         switch event {
-        case .youStarted, .youLive, .youFinal, .posted, .discarded, .chiefQueued, .chiefStarted, .chiefEnded, .chiefUnavailable:
+        case .youStarted, .youLive, .youFinal, .posted, .discarded, .chiefQueued, .chiefFinalReceived, .chiefStarted, .chiefEnded, .chiefUnavailable:
             log.handle(event, userText: pill.you.text)
         default: break // Meter ticks must not rebuild/publish the conversation log.
         }
     }
     public func update(status: ConversationController.Status, owner: UUID) {
         guard owner == binding else { return }
+        if status.newConversation { connection = status.connection; active = false }
         let voiceChanged = pill.status.running != status.running || pill.status.outputMuted != status.outputMuted
         pill.update(status: status)
         if voiceChanged { log.setVoice(running: status.running, muted: status.outputMuted) }
@@ -99,6 +101,10 @@ public enum VoiceCaptureState: Sendable { case off, starting, running, repairing
     public var state: String {
         if capture == .failed { return "Microphone stopped · try Start voice" }
         if capture == .repairing { return "Switching audio…" }
+        if pill.status.newConversation && pill.status.running &&
+            (!captureRunning || pill.status.phase != "ready" || pill.status.connection != "connected") {
+            return "Preparing microphone…"
+        }
         if !captureRunning && (preparing || (pill.status.running && pill.status.phase != "ready")) { return "Preparing microphone…" }
         if submitting || pill.status.sending { return "Sending message…" }
         if pill.status.speaking { return "\(AgentPresentation.name) speaking" }
