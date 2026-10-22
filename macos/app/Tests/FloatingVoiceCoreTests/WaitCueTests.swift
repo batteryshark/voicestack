@@ -247,7 +247,7 @@ import Testing
         #expect(ChiefDiscovery.pick(from: list) == "ses_bbb222")
         #expect(ChiefDiscovery.pick(from: [summary("ses_x", "Other", 1)]) == nil)
         #expect(ChiefDiscovery.pick(from: []) == nil)
-        #expect(SessionSummary.shortID("ses_SYNTHETIC0022c76RThXACt6GCT") == "SYNTHE")
+        #expect(SessionSummary.shortID("ses_SYNTHETIC0022") == "SYNTHE")
         #expect(summary("ses_SYNTHETIC0022", "Chief of staff", 0).label == "Chief of staff · SYNTHE")
         #expect(summary("ses_SYNTHETIC0022", "", 0).label == "Untitled · SYNTHE")
     }
@@ -320,7 +320,7 @@ import Testing
     @Test func headerNamesTheSessionWithAShortID() {
         var s = ConversationController.Status()
         #expect(s.targetLabel == nil)
-        s.target = "ses_SYNTHETIC0022c76RThXACt6GCT"
+        s.target = "ses_SYNTHETIC0022"
         #expect(s.targetLabel == "Session · SYNTHE")
         s.targetTitle = "Chief of staff"
         #expect(s.targetLabel == "Chief of staff · SYNTHE")

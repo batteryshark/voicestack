@@ -24,7 +24,7 @@ private func sequence(name: String, cues: [Cue], duration: Double, canvas: CGSiz
     let pill = PillModel(now: { clock })
     var status = ConversationController.Status()
     status.running = true; status.phase = "ready"; status.connection = "connected"
-    status.target = "ses_SYNTHETIC0022c76RThXACt6GCT"; status.targetTitle = "Chief of staff"
+    status.target = "ses_SYNTHETIC0022"; status.targetTitle = "Chief of staff"
     pill.update(status: status)
     let settings = sampleSettings()
     let motion = PillMotion()

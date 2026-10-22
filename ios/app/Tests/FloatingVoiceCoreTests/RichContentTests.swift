@@ -79,7 +79,7 @@ import WebKit
         #expect(LinkPolicy(approvedManifests: [outside]).install(link(outside)) == nil)
         #expect(LinkPolicy(approvedManifests: [allowed]).install(link(allowed)) != nil)
         #expect(LinkPolicy(approvedManifests: [allowed]).install(link("https://other.example-tailnet.invalid/app.plist")) == nil)
-        for raw in ["https://BUILD.example-tailnet.TS.NET.:9443/path/build.plist?version=2", "https://nested.build.example-tailnet.invalid:8443/any/path"] {
+        for raw in ["https://BUILD.example-tailnet.invalid.:9443/path/build.plist?version=2", "https://nested.build.example-tailnet.invalid:8443/any/path"] {
             #expect(LinkPolicy(approvedManifests: [raw]).install(link(raw)) == nil)
         }
         for raw in [outside, "http://build.example-tailnet.invalid/a", "https://example-tailnet.invalid/a", "https://build.example-tailnet.invalid.evil.example/a", "https://fake-example-tailnet.invalid/a", "https://build.example-tailnet.invalid@evil.example/a", "https://user:pass@build.example-tailnet.invalid/a", "https://build.example-tailnet.invalid/a#fragment"] {

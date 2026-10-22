@@ -103,7 +103,7 @@ private func makeState(_ configure: (PillModel, inout ConversationController.Sta
     status.running = true
     status.phase = "ready"
     status.connection = "connected"
-    status.target = "ses_SYNTHETIC0022c76RThXACt6GCT"
+    status.target = "ses_SYNTHETIC0022"
     status.targetTitle = "Chief of staff"
     pill.update(status: status)
     configure(pill, &status, { clock += $0 })
@@ -145,7 +145,7 @@ func sampleSettings() -> SettingsState {
     s.busyDelivery = .queue
     s.target = "chief"
     s.chiefSource = "chief.json"
-    s.sessions = [.init(id: "ses_SYNTHETIC0022c76RThXACt6GCT", label: "Chief of staff · SYNTHE"), .init(id: "ses_SYNTHETIC0018", label: "Pill behaviour · SYNTHE"),
+    s.sessions = [.init(id: "ses_SYNTHETIC0022", label: "Chief of staff · SYNTHE"), .init(id: "ses_SYNTHETIC0018", label: "Pill behaviour · SYNTHE"),
                   .init(id: "ses_SYNTHETIC0025", label: "Synthetic sample project · SYNTHE")]
     s.running = true
     s.appFile = "~/.config/floating-voice/settings.json"
